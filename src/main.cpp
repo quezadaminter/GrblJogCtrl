@@ -27,6 +27,7 @@ volatile uint8_t selector1Pos[12] = { HOME, AXIS_X, AXIS_Y, AXIS_Z, LOCKOUT, UNL
 volatile uint8_t selector2Pos[12] = { JOG, XP1, X1, X10, X100, SET_AXIS_ZERO, MACRO1, MACRO2, 255, 255, 255, 255 };
 volatile uint8_t *sel1Pos = NULL;
 volatile uint8_t *sel2Pos = NULL;
+volatile uint8_t emptySel = 255;
 bool testPat = false;
 uint8_t multiplierSet = 1;
 bool jogMode = false;
@@ -37,6 +38,7 @@ void TestSelector2();
 #define ENC_A 15
 #define ENC_B 16
 #define ENC_SW 17
+void EncoderInterrupt();
 
 // Display
 #define TFT_PWR 6
@@ -61,12 +63,14 @@ void UpdateGrblTerminal();
 void UpdateCommandTerminal();
 
 // GRBL
+#define GRBL_STATUS_TIMEOUT 1000
 elapsedMillis grblStatusTimer;
 char statusBuffer[300] = { '\0' };
 char serialBuf[tCOLS] = { '\0' };
 uint8_t serialBufPtr(0);
 char UserialBuf[512] = { '\0' };
 uint16_t UserialBufPtr(0);
+void SendToGrbl(const char *msg);
 
 #define GRBL_STATUS_ENUM \
 ADD_ENUM(eStatus)\
@@ -221,7 +225,8 @@ void AddLineToGrblTerminal(const char *line)
    {
       strncpy(terminal[r - 1], terminal[r], tCOLS - 1);
    }
-   strncpy(terminal[tROWS - 1], line, tCOLS - 1);
+   size_t l(strnlen(line, tCOLS - 1));
+   strncpy(terminal[tROWS - 1], line, l);
 }
 
 void AddLineToCommandTerminal(const char *line)
@@ -230,7 +235,8 @@ void AddLineToCommandTerminal(const char *line)
    {
       strncpy(cmdTerminal[r - 1], cmdTerminal[r], tCOLS - 1);
    }
-   strncpy(cmdTerminal[cROWS - 1], line, tCOLS - 1);
+   size_t l(strnlen(line, tCOLS - 1));
+   strncpy(cmdTerminal[cROWS - 1], line, l);
 }
 
 void setup()
@@ -269,22 +275,22 @@ void setup()
 //   pinMode(CYCLE_START, INPUT_PULLUP);
    //pinMode(ENC_SW, INPUT_PULLUP);
 
-   attachInterrupt(digitalPinToInterrupt(HOME), TestSelector1, FALLING);
-   attachInterrupt(digitalPinToInterrupt(AXIS_X), TestSelector1, FALLING);
-   attachInterrupt(digitalPinToInterrupt(AXIS_Y), TestSelector1, FALLING);
-   attachInterrupt(digitalPinToInterrupt(AXIS_Z), TestSelector1, FALLING);
-   attachInterrupt(digitalPinToInterrupt(LOCKOUT), TestSelector1, FALLING);
-   attachInterrupt(digitalPinToInterrupt(UNLOCK), TestSelector1, FALLING);
-   attachInterrupt(digitalPinToInterrupt(RESET), TestSelector1, FALLING);
+   attachInterrupt(digitalPinToInterrupt(HOME), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(AXIS_X), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(AXIS_Y), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(AXIS_Z), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(LOCKOUT), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(UNLOCK), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(RESET), TestSelector1, CHANGE);
 
-   attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2, FALLING);
-   attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2, FALLING);
-   attachInterrupt(digitalPinToInterrupt(X1), TestSelector2, FALLING);
-   attachInterrupt(digitalPinToInterrupt(X10), TestSelector2, FALLING);
-   attachInterrupt(digitalPinToInterrupt(X100), TestSelector2, FALLING);
-   attachInterrupt(digitalPinToInterrupt(SET_AXIS_ZERO), TestSelector2, FALLING);
-   attachInterrupt(digitalPinToInterrupt(MACRO1), TestSelector2, FALLING);
-   attachInterrupt(digitalPinToInterrupt(MACRO2), TestSelector2, FALLING);
+   attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(X1), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(X10), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(X100), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(SET_AXIS_ZERO), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(MACRO1), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(MACRO2), TestSelector2, CHANGE);
    //attachInterrupt(digitalPinToInterrupt(SPINDLE_SPD), TestSwitch, CHANGE);
    //attachInterrupt(digitalPinToInterrupt(FEEDRATE), TestSwitch, CHANGE);
    //attachInterrupt(digitalPinToInterrupt(LOCKOUT), TestSwitch, CHANGE);
@@ -324,7 +330,9 @@ void setup()
    
   // Encoder pins
   Enc.begin(ENC_A, ENC_B, ENC_SW);
-
+  attachInterrupt(digitalPinToInterrupt(ENC_A), EncoderInterrupt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC_B), EncoderInterrupt, CHANGE);
+  
   // Display
   pinMode(TFT_BL, OUTPUT);
   //digitalWriteFast(TFT_BL, HIGH);
@@ -339,8 +347,14 @@ void setup()
   tft.updateScreenAsync();
 }
 
+void EncoderInterrupt()
+{
+   Enc.HandleInterrupt();
+}
+
 void TestSelector1()
 {
+   sel1Pos = &emptySel;
    for(uint8_t s = 0; s < 12; ++s)
    {
       if(selector1Pos[s] != 255 && digitalReadFast(selector1Pos[s]) == LOW)
@@ -353,6 +367,7 @@ void TestSelector1()
 
 void TestSelector2()
 {
+   sel2Pos = &emptySel;
    for(uint8_t s = 0; s < 12; ++s)
    {
       if(selector2Pos[s] != 255 && digitalReadFast(selector2Pos[s]) == LOW)
@@ -363,57 +378,61 @@ void TestSelector2()
    }
 }
 
-
-
 void MonitorUSBDevices()
 {
    // Print out information about different devices.
-  for (uint8_t i = 0; i < CNT_DEVICES; i++) {
-    if (*drivers[i] != driver_active[i]) {
-       char buf[128] = { '\0' };
-      if (driver_active[i]) {
-        sprintf(buf, "*** Device %s - disconnected ***\n", driver_names[i]);
-        driver_active[i] = false;
-        Serial.print(buf);
-        AddLineToCommandTerminal(buf);
-      } else {
-        sprintf(buf, "*** Device %s %x:%x - connected ***\n", driver_names[i], drivers[i]->idVendor(), drivers[i]->idProduct());
-        driver_active[i] = true;
-        Serial.print(buf);
-        AddLineToCommandTerminal(buf);
+   for (uint8_t i = 0; i < CNT_DEVICES; i++)
+   {
+      if (*drivers[i] != driver_active[i])
+      {
+         char buf[128] = {'\0'};
+         if (driver_active[i])
+         {
+            sprintf(buf, "*** Device %s - disconnected ***\n", driver_names[i]);
+            driver_active[i] = false;
+            //Serial.print(buf);
+            grblState = eUnkownState;
+            AddLineToCommandTerminal(buf);
+         }
+         else
+         {
+            sprintf(buf, "*** Device %s %x:%x - connected ***\n", driver_names[i], drivers[i]->idVendor(), drivers[i]->idProduct());
+            driver_active[i] = true;
+            //Serial.print(buf);
+            AddLineToCommandTerminal(buf);
 
-        const uint8_t *psz = drivers[i]->manufacturer();
-        if (psz && *psz)
-        {
-           sprintf(buf, "  manufacturer: %s\n", psz);
-           Serial.print(buf);
-           AddLineToCommandTerminal(buf);
-        }
-        psz = drivers[i]->product();
-        if (psz && *psz)
-        {
-           sprintf(buf, "  product: %s\n", psz);
-           Serial.print(buf);
-           AddLineToCommandTerminal(buf);
-        }
-        psz = drivers[i]->serialNumber();
-        if (psz && *psz)
-        {
-           sprintf(buf, "  Serial: %s\n", psz);
-           Serial.print(buf);
-           AddLineToCommandTerminal(buf);
-        }
+            const uint8_t *psz = drivers[i]->manufacturer();
+            if (psz && *psz)
+            {
+               sprintf(buf, "  manufacturer: %s\n", psz);
+               //Serial.print(buf);
+               AddLineToCommandTerminal(buf);
+            }
+            psz = drivers[i]->product();
+            if (psz && *psz)
+            {
+               sprintf(buf, "  product: %s\n", psz);
+               //Serial.print(buf);
+               AddLineToCommandTerminal(buf);
+            }
+            psz = drivers[i]->serialNumber();
+            if (psz && *psz)
+            {
+               sprintf(buf, "  Serial: %s\n", psz);
+               //Serial.print(buf);
+               AddLineToCommandTerminal(buf);
+            }
 
-        // If this is a new Serial device.
-        if (drivers[i] == &userial) {
-          // Lets try first outputting something to our USerial to see if it will go out...
-          userial.begin(baud);
-
-        }
+            // If this is a new Serial device.
+            if (drivers[i] == &userial)
+            {
+               // Lets try first outputting something to our USerial to see if it will go out...
+               userial.begin(baud);
+            }
+         }
+         UpdateCommandTerminal();
       }
-      UpdateCommandTerminal();
-    }
-  }
+   }
 }
 
 char ReadUSBSerial()
@@ -422,6 +441,17 @@ char ReadUSBSerial()
    char c(userial.read());
    Serial.write(c);
    return(c);
+}
+
+void ParseConnected(char *line)
+{
+   grblState = eConnected;
+   AddLineToGrblTerminal(line);
+   // Request current state and settings from Grbl.
+   SendToGrbl(GRBL_VIEWSETTIMGS);
+   SendToGrbl(GRBL_PARAMETERS);
+   SendToGrbl(GRBL_GCODEPARSER);
+   userial.write(GRBL_STATUSREPORT);
 }
 
 uint16_t ParseStatusMessage(char *msg)
@@ -536,12 +566,16 @@ uint16_t ParseStatusMessage(char *msg)
    return(p);
 }
 
-void ParseBracketMessage()
+void ParseBracketMessage(char *line)
 {
-   
+   uint8_t breaks((strlen(line) / (tCOLS - 1)) + 1);
+   for(uint8_t l = 0; l < breaks; ++l)
+   {
+      AddLineToGrblTerminal(&line[l * (tCOLS - 1)]);
+   }
 }
 
-void ParseEEPROMData()
+void ParseEEPROMData(char *line)
 {
    
 }
@@ -732,6 +766,14 @@ void UpdateStatusDisplay()
             Text(x, y, s);
          }
       }
+
+      if(statusValues[eFeed] != NULL)
+      {
+         x = 180;
+         y = 0;
+         tft.fillRect(x, y, 100, 16, ILI9488_BLACK);
+         Text(x, y, statusValues[eFeed]);
+      }
    
       //tft.setTextSize(1);
       //tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
@@ -824,34 +866,57 @@ void UpdateCommandTerminal()
 
 void ProcessLineFromGrbl()
 {
-   for(uint16_t i = 0; i < 512; ++i)
+   if(strncasecmp(UserialBuf, "ok", 2) == 0)
    {
-      if(UserialBuf[i] == '<')
-      {
-         i += ParseStatusMessage(&UserialBuf[i]);
-      }
-      else
-      {
-         i += ParseOther(&UserialBuf[i]);
-      }
-
-      if(i < 512 && UserialBuf[i] == '\0')
-      {
-         break;
-      }
+      --grblLinesSent;
+      ParseOther(UserialBuf);
    }
+   else if(UserialBuf[0] == '<')
+   {
+      ParseStatusMessage(UserialBuf);
+   }
+   else if(strncasecmp(UserialBuf, "error:", 6) == 0)
+   {
+      ParseOther(UserialBuf);
+   }
+   else if(strncasecmp(UserialBuf, "ALARM:", 6) == 0)
+   {
+      ParseOther(UserialBuf);
+   }
+   else if(UserialBuf[0] == '[')
+   {
+      ParseBracketMessage(UserialBuf);
+   }
+   else if(UserialBuf[0] == '$')
+   {
+      ParseEEPROMData(UserialBuf);
+   }
+   else if(strncmp(UserialBuf, "Grbl ", 5) == 0)
+   {
+      ParseConnected(UserialBuf);
+   }
+   //for(uint16_t i = 0; i < 512; ++i)
+   //{
+   //   if(UserialBuf[i] == '<')
+   //   {
+   //      i += ParseStatusMessage(&UserialBuf[i]);
+   //   }
+   //   else
+   //   {
+   //      i += ParseOther(&UserialBuf[i]);
+   //   }
+
+   //   if(i < 512 && UserialBuf[i] == '\0')
+   //   {
+   //      break;
+   //   }
+   //}
 }
 
 void SendToGrbl(const char *msg)
 {
    userial.println(msg);
    ++grblLinesSent;
-}
-
-//uint16_t map(float x, float in_min, float in_max, uint16_t out_min, uint16_t out_max) {
-uint16_t map(float x, float in_min, float in_max, uint16_t out_min, uint16_t out_max) {
-  return (in_min - x) * (out_max - out_min) / (in_min - in_max) + out_min;
-  //return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 void loop()
@@ -863,139 +928,17 @@ void loop()
        tft.updateScreenAsync();
    }
 
-   //multiplierSet = (digitalReadFast(MULT_1X) & 1) | (digitalReadFast(MULT_10X) & 10) | (digitalReadFast(MULT_100X) & 100);
-   
-  myusb.Task();
-  MonitorUSBDevices();
+   myusb.Task();
+   MonitorUSBDevices();
  
-//   if(Serial1.available())
-//   {
-//      Serial1.println("Serial1 sez:");
-//      while (Serial1.available())
-//      {
-//         Serial1.write(Serial1.read());
-//      }
-//   }
+   Enc.Update(&userial);
 
-   grblState = eJog;
-   Enc.Update();
-   if((grblState == eJog || grblState == eIdle) &&
-      (*sel1Pos == AXIS_X || *sel1Pos == AXIS_Y || *sel1Pos == AXIS_Z))
-   {
-      if(*sel2Pos == JOG)
-      {
-         float dt = -1, dt1 = -1;
-         if(mEncSteps != 0)
-         {
-            time_t delta(uSecs - olduSecs);
-            //float fr(mEncSteps / (float)delta);
-            //Serial.println(delta);Serial.println(mEncSteps);Serial.println(fr);
-            //fr = map(fr, 0.0, 1.0, 0, 50);
-            //Serial.println(fr);
-            //Serial.println(mEncSteps);
-            //userial.print("delta: "); userial.println(delta);
-            float f(0);
-            float s(0);
-            int8_t dir(mEncSteps > 0 ? 1 : -1);
-            if(delta > 100)
-            {
-               s = 0.1 * dir;
-               f = 500;
-               // Do not bother sending a stop command for this
-               // motion since it is too short.
-            }
-            else
-            {
-               jogging = true;
-               delta = delta < 10 ? 10 :delta;
-               f = map(delta, 100.0, 10.0, 100, 1000);
-              //if(delta < 10)
-              //{
-              //   f = 1000;
-              //}
-              //else if(delta < 25)
-              //{
-              //   f = 750;
-              //}
-              //else if(delta < 50)
-              //{
-              //   f = 500;
-              //}
-              //else if(delta < 75)
-              //{
-              //   f = 250;
-              //}
-              //else if(delta <= 100)
-              //{
-              //   f = 100;
-              //}
-              float v(f / 60.0);
-              dt = ((v * v) / (2.0 * AXES_ACCEL[0] * 14));
-              //dt = dt < 0.01 ? 0.01 : dt;
-
-              dt1 = v / AXES_ACCEL[0];
-              dt1 = v * dt1 * dir;
-              s = (v * dt) * dir;
-            }
-            
-            char jog[128] = { '\0' };
-            const char *XYZ = (*sel1Pos == AXIS_X ? "X" : *sel1Pos == AXIS_Y ? "Y" : "Z");
-            sprintf(jog, "$J=G91F%.3f%s%.3f ; %ld ; %f ; %f", f, XYZ, s, delta, dt, dt1);
-            userial.println(jog);
-            Serial.println(jog);
-            mEncSteps = 0;
-         }
-         else if(jogging == true)
-         {
-            if(millis() - uSecs > 200)
-            {
-               jogging = false;
-               userial.write(0x85);
-               //userial.println("G4P0");
-               Serial.println("STOP");
-            }
-         }
-      }
-      else if(*sel2Pos == XP1 && mEncSteps != 0)
-      {
-         int8_t dir(mEncSteps > 0 ? 1 : -1);
-         char jog[128] = { '\0' };
-         const char *XYZ = (*sel1Pos == AXIS_X ? "X" : *sel1Pos == AXIS_Y ? "Y" : "Z");
-         sprintf(jog, "$J=G91F100%s%.3f", XYZ, 0.1 * dir);
-         userial.println(jog);
-      }
-      else if(*sel2Pos == X1 && mEncSteps != 0)
-      {
-         int8_t dir(mEncSteps > 0 ? 1 : -1);
-         char jog[128] = { '\0' };
-         const char *XYZ = (*sel1Pos == AXIS_X ? "X" : *sel1Pos == AXIS_Y ? "Y" : "Z");
-         sprintf(jog, "$J=G91F100%s%d", XYZ, dir);
-         userial.println(jog);
-      }
-      else if(*sel2Pos == X10 && mEncSteps != 0)
-      {
-         int8_t dir(mEncSteps > 0 ? 1 : -1);
-         char jog[128] = { '\0' };
-         const char *XYZ = (*sel1Pos == AXIS_X ? "X" : *sel1Pos == AXIS_Y ? "Y" : "Z");
-         sprintf(jog, "$J=G91F250%s%d", XYZ, 10 * dir);
-         userial.println(jog);
-      }
-      else if(*sel2Pos == X100 && mEncSteps != 0 && *sel1Pos != AXIS_Z)
-      {
-         int8_t dir(mEncSteps > 0 ? 1 : -1);
-         char jog[128] = { '\0' };
-         const char *XYZ = (*sel1Pos == AXIS_X ? "X" : "Y");
-         sprintf(jog, "$J=G91F500%s%d", XYZ, 100 * dir);
-         userial.println(jog);
-      }
-      mEncSteps = 0;
-   }
-
-  if(grblStatusTimer >= 250)
+   // Request an update of the status in GRBL
+  if(grblStatusTimer >= GRBL_STATUS_TIMEOUT)
   {
-     grblStatusTimer -= 250;
+     grblStatusTimer -= GRBL_STATUS_TIMEOUT;
      // Get a status update
-     userial.write('?');//Serial.println();
+     userial.write('?');
      //userial.print(grblTestStatus);
   }
 
@@ -1009,7 +952,7 @@ void loop()
       // This was not sent by us.
       if(c == '?')
       {
-         grblStatusTimer -= 500;
+         grblStatusTimer -= (GRBL_STATUS_TIMEOUT * 2);
       }
       // Process locally for display
       else if(c == '\n')
@@ -1032,6 +975,10 @@ void loop()
       }
   }
   
+  // Grab the messages from GRBL,
+  // forward them to the computer,
+  // then parse them here to
+  // display the state on the pendant.
   if(userial.available())
   {
       char c(ReadUSBSerial());
@@ -1058,7 +1005,7 @@ void loop()
   if(digitalReadFast(ENC_SW) == LOW && testPat == false)
   {
      testPat = true;
-     if(*sel1Pos == 0 && *sel2Pos == 0)
+     if(*sel1Pos == 255 && *sel2Pos == 255)
      {
         DrawTestPattern();
      }
@@ -1072,7 +1019,7 @@ void loop()
   else if(digitalReadFast(ENC_SW) == HIGH && testPat == true)
   {
      testPat = false;
-     if(*sel1Pos == 0 && *sel2Pos == 0)
+     if(*sel1Pos == 255 && *sel2Pos == 255)
      {
         Blank();
         UpdateCommandTerminal();
@@ -1086,6 +1033,10 @@ void loop()
      else if(*sel1Pos == RESET)
      {
         userial.write(0x18);
+     }
+     else if(*sel1Pos == LOCKOUT)
+     {
+        userial.println("$$");
      }
      else if(*sel1Pos == UNLOCK && (grblState == eIdle || grblState == eAlarm))
      {
