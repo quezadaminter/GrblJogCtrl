@@ -92,6 +92,15 @@ StyleCopReport.xml
 *.pidb
 *.svclog
 *.scc
+*.d
+*.o
+*.a
+
+# Linked by the avr-gcc compiler.
+*.sym
+*.hex
+*.elf
+*.lst
 
 # Chutzpah Test files
 _Chutzpah*

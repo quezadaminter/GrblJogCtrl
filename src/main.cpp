@@ -1,6 +1,18 @@
-// Simple test of USB Host Mouse/Keyboard
+// GRBL controller interface. Works as a
+// standalone device or man-in-the-middle mode.
+// Provides a jog wheel and other inputs to
+// manipulate GRBL's state. I use it with my
+// 750mm X-Carve. The code in this file is
+// mostly USB, communications and display
+// management. The Encoder class contains
+// the code that handles the operation of
+// the jog wheel, which for now is limited
+// to generating jog commands for Grbl.
 //
-// This example is in the public domain
+// This code is written and intended for
+// a Teensy 4.X board and the USB functionality
+// is taken from the USBHost_t36 library
+// examples.
 #include <Arduino.h>
 #include <SPI.h>
 #include "Config.h"
@@ -241,7 +253,19 @@ void AddLineToCommandTerminal(const char *line)
 
 void setup()
 {
-  //pinMode(13, OUTPUT);
+  // Display
+  pinMode(TFT_BL, OUTPUT);
+  analogWrite(TFT_BL, 128);
+  tft.begin();
+  tft.setRotation(1);
+  tft.setFrameBuffer(tftFB);
+  memset(terminal, '\0', sizeof(terminal[0][0]) * tROWS * tCOLS);
+  memset(cmdTerminal, '\0', sizeof(cmdTerminal[0][0]) * cROWS * tCOLS);
+  //tft.fillScreen(ILI9488_BLACK);
+  Blank();
+  tft.updateScreenAsync();
+
+  // IO
   pinMode(2, OUTPUT);
   pinMode(3, OUTPUT);
   for (int i = 0; i < 5; i++) {
@@ -251,7 +275,7 @@ void setup()
     delayMicroseconds(50);
   }
   while (!Serial && (millis() < 5000)) ; // wait for Arduino Serial Monitor
-  Serial.println("\n\nUSB Host Testing - Serial");
+  //Serial.println("\n\nUSB Host Testing - Serial");
   myusb.begin();
   //Serial1.begin(115200);  // We will echo stuff Through Serial1...
 
@@ -291,17 +315,6 @@ void setup()
    attachInterrupt(digitalPinToInterrupt(SET_AXIS_ZERO), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(MACRO1), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(MACRO2), TestSelector2, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(SPINDLE_SPD), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(FEEDRATE), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(LOCKOUT), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(SPINDLE), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(STOP), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(SET_AXIS_ZERO), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(MACRO1), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(MACRO2), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(MACRO3), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(MACRO4), TestSwitch, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(CYCLE_START), TestSwitch, CHANGE);
 
    for(uint8_t s = 0; s < 12; ++s)
    {
@@ -332,19 +345,6 @@ void setup()
   Enc.begin(ENC_A, ENC_B, ENC_SW);
   attachInterrupt(digitalPinToInterrupt(ENC_A), EncoderInterrupt, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B), EncoderInterrupt, CHANGE);
-  
-  // Display
-  pinMode(TFT_BL, OUTPUT);
-  //digitalWriteFast(TFT_BL, HIGH);
-  analogWrite(TFT_BL, 128);
-  tft.begin();
-  tft.setRotation(1);
-  tft.setFrameBuffer(tftFB);
-  memset(terminal, '\0', sizeof(terminal[0][0]) * tROWS * tCOLS);
-  memset(cmdTerminal, '\0', sizeof(cmdTerminal[0][0]) * cROWS * tCOLS);
-  //tft.fillScreen(ILI9488_BLACK);
-  Blank();
-  tft.updateScreenAsync();
 }
 
 void EncoderInterrupt()
@@ -834,7 +834,6 @@ void UpdateGrblTerminal()
             tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
          }
          Text(0,(r * ch) , terminal[r]);
-         //Serial.print(r);Serial.print(":");Serial.println(terminal[r]);
       }
       --r;
    }
@@ -895,27 +894,17 @@ void ProcessLineFromGrbl()
    {
       ParseConnected(UserialBuf);
    }
-   //for(uint16_t i = 0; i < 512; ++i)
-   //{
-   //   if(UserialBuf[i] == '<')
-   //   {
-   //      i += ParseStatusMessage(&UserialBuf[i]);
-   //   }
-   //   else
-   //   {
-   //      i += ParseOther(&UserialBuf[i]);
-   //   }
-
-   //   if(i < 512 && UserialBuf[i] == '\0')
-   //   {
-   //      break;
-   //   }
-   //}
 }
 
 void SendToGrbl(const char *msg)
 {
-   userial.println(msg);
+   // The Arduino's println method in the Stream class
+   // seems to line endings with \r\n. This causes GRBL
+   // to interpret them as 2 separate lines which adds
+   // unnecessary overhead. Instead, use print() and
+   // send a single \n byte separately.
+   userial.print(msg);
+   userial.print('\n');
    ++grblLinesSent;
 }
 
@@ -939,7 +928,7 @@ void loop()
      grblStatusTimer -= GRBL_STATUS_TIMEOUT;
      // Get a status update
      userial.write('?');
-     //userial.print(grblTestStatus);
+     //SendToGrbl(grblTestStatus);
   }
 
   // Pass the serial data from computer to Grbl via userial.
@@ -1013,7 +1002,7 @@ void loop()
      {
         // Stop the jog command imediately.
         userial.write(0x85);
-        userial.println("G4P0");
+        SendToGrbl("G4P0");
      }
   }
   else if(digitalReadFast(ENC_SW) == HIGH && testPat == true)
@@ -1028,7 +1017,7 @@ void loop()
      }
      else if(*sel1Pos == HOME && (grblState == eIdle || grblState == eAlarm))
      {
-        userial.println("$H");
+        SendToGrbl("$H");
      }
      else if(*sel1Pos == RESET)
      {
@@ -1036,11 +1025,11 @@ void loop()
      }
      else if(*sel1Pos == LOCKOUT)
      {
-        userial.println("$$");
+        SendToGrbl("$$");
      }
      else if(*sel1Pos == UNLOCK && (grblState == eIdle || grblState == eAlarm))
      {
-        userial.println("$X");
+        SendToGrbl("$X");
      }
   }
 }

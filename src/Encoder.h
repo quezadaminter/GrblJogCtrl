@@ -26,6 +26,8 @@ class Encoder
       uint16_t AXES_ACCEL [3] = { 500, 500, 50 }; // mm/s/s <-- Need to fill these from the GRBL eeprom values $120-$122
       volatile time_t uSecs = 0, olduSecs = 0;
       bool jogging = false;
+      uint16_t JOG_MIN_SPEED = 1000; // mm/min (Don't make it too slow).
+      uint16_t JOG_MAX_SPEED = 8000; // mm/min (Needs to be set from the GRBL eeprom settings $110-$112
 
       void Jog_WheelSpeedVsFeedRate(time_t delta, int8_t dir, float &f, float &s);
       void Jog_StepsPerRevolution(time_t delta, int8_t dir, float &f, float &s);
