@@ -17,6 +17,7 @@
 #include <SPI.h>
 #include "Config.h"
 #include "Encoder.h"
+#include "ButtonMatrix.h"
 #include "ILI9488_t3.h"
 #include "USBHost_t36.h"
 #define USBBAUD 115200
@@ -35,22 +36,96 @@ USBDriver *drivers[] = {&hub1, &hub2, &hid1, &hid2, &hid3, &userial};
 const char * driver_names[CNT_DEVICES] = {"Hub1", "Hub2",  "HID1", "HID2", "HID3", "USERIAL1" };
 bool driver_active[CNT_DEVICES] = {false, false, false, false};
 
-volatile uint8_t selector1Pos[12] = { HOME, AXIS_X, AXIS_Y, AXIS_Z, LOCKOUT, UNLOCK, RESET, 255, 255, 255, 255, 255 };
-volatile uint8_t selector2Pos[12] = { JOG, XP1, X1, X10, X100, SET_AXIS_ZERO, MACRO1, MACRO2, 255, 255, 255, 255 };
-volatile uint8_t *sel1Pos = NULL;
-volatile uint8_t *sel2Pos = NULL;
-volatile uint8_t emptySel = 255;
+//volatile uint8_t selector1Pos[12] = { SYSTEM, AXIS_X, AXIS_Y, AXIS_Z, SPINDLE, FEEDRATE, LCDBRT, 255, 255, 255, 255, 255 };
+volatile uintCharStruct selector1Pos[12] =
+{
+   { SYSTEM, "SYSTEM" }, { AXIS_X, "X AXIS" }, { AXIS_Y, "Y AXIS" }, { AXIS_Z, "Z AXIS" },
+   { SPINDLE, "SPINDLE" }, { FEEDRATE, "FEEDRATE" }, { LCDBRT, "LCD BRT" }, { 255, "\0" },
+   {255, "\0" }, { 255, "\0" }, { 255, "\0" }, { 255, "\0" }
+};
+
+volatile uintCharStruct selector2Pos[12] =
+{
+   { JOG, "JOG" }, { XP1, "0.1X" }, { X1, "1X" }, { X10, "10X" },
+   { X100, "100X" }, { 255, "\0" }, { 255, "\0" }, { 255, "\0" },
+   { 255, "\0" }, {255, "\0" }, { 255, "\0" }, { 255, "\0" }
+};
+//volatile uint8_t selector2Pos[12] = { JOG, XP1, X1, X10, X100, 255, 255, 255, 255, 255, 255, 255 };
+volatile uintCharStruct emptySel = { 255, "NONE" };
+volatile uintCharStruct *sel1Pos = &emptySel;
+volatile uintCharStruct *sel2Pos = &emptySel;
+volatile bool updateSelectorStates = false;
+
 bool testPat = false;
 uint8_t multiplierSet = 1;
 bool jogMode = false;
 void TestSelector1();
 void TestSelector2();
 
+// Button Matrix
+#define BMSOL 20
+#define BMCLK 19
+#define BMQH  18
+void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::ButtonStateType state);
+// Map matrix inputs to Grbl signals or commands
+
+// Permanently assigned.
+#define BTN_FEEDHOLD              ButtonMatrix::eR4C1
+#define BTN_CYCLE_START_RESUME    ButtonMatrix::eR4C2
+#define BTN_SHIFT                 ButtonMatrix::eR4C3
+
+// Default behavior
+#define BTN_SetZ0     ButtonMatrix::eR1C1
+#define BTN_GotoZ0    ButtonMatrix::eR1C2
+#define BTN_LaserMode ButtonMatrix::eR1C3
+
+#define BTN_SetY0   ButtonMatrix::eR2C1
+#define BTN_GotoY0    ButtonMatrix::eR2C2
+#define BTN_GotoX0Y0 ButtonMatrix::eR2C3
+
+#define BTN_SetX0    ButtonMatrix::eR3C1
+#define BTN_GotoX0    ButtonMatrix::eR3C2
+#define BTN_M3M5    ButtonMatrix::eR3C3
+
+bool btnShiftPressed = false;
+// Default behavior + SHIFT
+#define BTN_ProbeZ     ButtonMatrix::eR1C1
+#define BTN_G56     ButtonMatrix::eR1C2
+#define BTN_G59 ButtonMatrix::eR1C3
+
+#define BTN_ProbeY   ButtonMatrix::eR2C1
+#define BTN_G55    ButtonMatrix::eR2C2
+#define BTN_G58 ButtonMatrix::eR2C3
+
+#define BTN_ProbeX    ButtonMatrix::eR3C1
+#define BTN_G54    ButtonMatrix::eR3C2
+#define BTN_G57    ButtonMatrix::eR3C3
+
+// System Mode
+#define BTN_HOME     ButtonMatrix::eR1C1
+#define BTN_RUN_TOOL_CHANGE_MACRO  ButtonMatrix::eR1C2
+#define BTN_TOGGLE_LASER_TEST_MODE ButtonMatrix::eR1C3
+
+//#define BTN_NA   ButtonMatrix::eR2C1
+//#define BTN_NA    ButtonMatrix::eR2C2
+#define BTN_FORCE_RESYNC ButtonMatrix::eR2C3
+
+#define BTN_SOFTRESET    ButtonMatrix::eR3C1
+#define BTN_UNLOCK    ButtonMatrix::eR3C2
+#define BTN_SLEEP    ButtonMatrix::eR3C3
+
+//////////////////////////////////////////////////////////////
+
 // Encoder
 #define ENC_A 15
 #define ENC_B 16
 #define ENC_SW 17
 void EncoderInterrupt();
+uint16_t JOG_MIN_SPEED = 1000; // mm/min (Don't make it too slow).
+uint16_t JOG_MAX_SPEED = 8000; // mm/min (Needs to be set from the GRBL eeprom settings $110-$112
+time_t _commandIntervalDelay = 100; // mSecs
+float _resolution = 10; // Inverse of distance travelled per pulse, for ex, 10 = 1 / 0.1mm/pulse 
+uint16_t AXES_ACCEL [3] = { 500, 500, 50 }; // mm/s/s <-- Need to fill these from the GRBL eeprom values $120-$122
 
 // Display
 #define TFT_PWR 6
@@ -63,8 +138,8 @@ void EncoderInterrupt();
 DMAMEM RAFB tftFB[ILI9488_TFTWIDTH * ILI9488_TFTHEIGHT];
 ILI9488_t3 tft(ILI9488_t3(TFT_CS, TFT_DC, TFT_RST));
 elapsedMillis displayRefresh;
-void UpdateStatusDisplay();
-void Blank();
+elapsedMillis heartBeatTimeout;
+uint8_t lcdBrightness = 128;
 #define tROWS 40
 #define tCOLS 31
 #define cROWS 28
@@ -73,6 +148,13 @@ char cmdTerminal[cROWS][tCOLS];
 
 void UpdateGrblTerminal();
 void UpdateCommandTerminal();
+void UpdateSpindleDisplay();
+void UpdateFeedRateDisplay();
+void UpdateSelectorStates();
+void UpdateStatusDisplay();
+void UpdateParameterDisplay();
+void UpdateLCDBrightnessIndication(bool clear = false);
+void Blank();
 
 // GRBL
 #define GRBL_STATUS_TIMEOUT 1000
@@ -83,6 +165,20 @@ uint8_t serialBufPtr(0);
 char UserialBuf[512] = { '\0' };
 uint16_t UserialBufPtr(0);
 void SendToGrbl(const char *msg);
+// For realtime / single byte commands
+void SendToGrbl(uint8_t b);
+char grblJogCommand[128] = { '\0' };
+
+// Request bitmasks
+#define EEREQ (1 << 0)
+#define WSREQ (1 << 1)
+#define GCREQ (1 << 2)
+#define BDREQ (1 << 3)
+#define ALLREQ (EEREQ | WSREQ | GCREQ | BDREQ)
+#define SETREQ(REQ, TYPE) (REQ |= TYPE)
+#define CLRREQ(REQ, TYPE) (REQ &= (~TYPE))
+void RequestGrblStateUpdate(uint8_t type);
+void SynchronizeWithGrbl();
 
 #define GRBL_STATUS_ENUM \
 ADD_ENUM(eStatus)\
@@ -124,10 +220,11 @@ enum grblPushMsgT { eMSG, eGC, eHLP, eVER, eEcho, eOther, eG54, eG55, eG56, eG57
 uint8_t grblLinesSent = 0;
 
 #define SFIELDS 20
+grblStateStruct grblState;
+
 char *statusValues[eStatusRange] = { '\0' };
 char *statusFields[SFIELDS] = { '\0' };
 char *pushMsgValues[ePushRange] = { '\0' };
-grblStatesT grblState = eUnkownState;
 const char *grblTestStatus = "<Idle|MPos:1.000,2.000,3.000|FS:4.0,5>";
 //<Idle|MPos:0.000,0.000,0.000|FS:0.0,0|WCO:13.0,6.0,2.0>            
 const char *grblAlarmDesc [] =
@@ -233,29 +330,41 @@ bool CompareStrings(const char *sz1, const char *sz2) {
 
 void AddLineToGrblTerminal(const char *line)
 {
-   for(uint8_t r = 1; r < tROWS; ++r)
+   // Wrap long lines.
+   uint8_t breaks((strlen(line) / (tCOLS - 1)) + 1);
+
+   for(uint8_t r = breaks; r < tROWS; ++r)
    {
-      strncpy(terminal[r - 1], terminal[r], tCOLS - 1);
+      strncpy(terminal[r - breaks], terminal[r], tCOLS - 1);
    }
-   size_t l(strnlen(line, tCOLS - 1));
-   strncpy(terminal[tROWS - 1], line, l);
+   
+   for(uint8_t r = 0; r < breaks; ++r)
+   {
+      strncpy(terminal[(tROWS - breaks) + r], &line[r * (tCOLS - 1)], tCOLS);
+   }
 }
 
 void AddLineToCommandTerminal(const char *line)
 {
-   for(uint8_t r = 1; r < cROWS; ++r)
+   // Wrap long lines.
+   uint8_t breaks((strlen(line) / (tCOLS - 1)) + 1);
+
+   for(uint8_t r = breaks; r < cROWS; ++r)
    {
-      strncpy(cmdTerminal[r - 1], cmdTerminal[r], tCOLS - 1);
+      strncpy(cmdTerminal[r - breaks], cmdTerminal[r], tCOLS - 1);
    }
-   size_t l(strnlen(line, tCOLS - 1));
-   strncpy(cmdTerminal[cROWS - 1], line, l);
+   
+   for(uint8_t r = 0; r < breaks; ++r)
+   {
+      strncpy(cmdTerminal[(cROWS - breaks) + r], &line[r * (tCOLS - 1)], tCOLS);
+   }
 }
 
 void setup()
 {
   // Display
   pinMode(TFT_BL, OUTPUT);
-  analogWrite(TFT_BL, 128);
+  analogWrite(TFT_BL, lcdBrightness);
   tft.begin();
   tft.setRotation(1);
   tft.setFrameBuffer(tftFB);
@@ -274,61 +383,53 @@ void setup()
     digitalWrite(2, LOW);
     delayMicroseconds(50);
   }
-  while (!Serial && (millis() < 5000)) ; // wait for Arduino Serial Monitor
-  //Serial.println("\n\nUSB Host Testing - Serial");
-  myusb.begin();
-  //Serial1.begin(115200);  // We will echo stuff Through Serial1...
 
-   pinMode(HOME, INPUT_PULLUP);
+  while (!Serial && (millis() < 5000)) ; // wait for Arduino Serial Monitor
+
+  myusb.begin();
+
+   pinMode(SYSTEM, INPUT_PULLUP);
    pinMode(AXIS_X, INPUT_PULLUP);
    pinMode(AXIS_Y, INPUT_PULLUP);
    pinMode(AXIS_Z, INPUT_PULLUP);
-   pinMode(LOCKOUT, INPUT_PULLUP);
-   pinMode(UNLOCK, INPUT_PULLUP);
-   pinMode(RESET, INPUT_PULLUP);
+   pinMode(SPINDLE, INPUT_PULLUP);
+   pinMode(FEEDRATE, INPUT_PULLUP);
+   pinMode(LCDBRT, INPUT_PULLUP);
 
    pinMode(JOG, INPUT_PULLUP);
    pinMode(XP1, INPUT_PULLUP);
    pinMode(X1, INPUT_PULLUP);
    pinMode(X10, INPUT_PULLUP);
    pinMode(X100, INPUT_PULLUP);
-   pinMode(SET_AXIS_ZERO, INPUT_PULLUP);
-   pinMode(MACRO1, INPUT_PULLUP);
-   pinMode(MACRO2, INPUT_PULLUP);
-//   pinMode(MACRO3, INPUT_PULLUP);
-//   pinMode(CYCLE_START, INPUT_PULLUP);
-   //pinMode(ENC_SW, INPUT_PULLUP);
 
-   attachInterrupt(digitalPinToInterrupt(HOME), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(SYSTEM), TestSelector1, CHANGE);
    attachInterrupt(digitalPinToInterrupt(AXIS_X), TestSelector1, CHANGE);
    attachInterrupt(digitalPinToInterrupt(AXIS_Y), TestSelector1, CHANGE);
    attachInterrupt(digitalPinToInterrupt(AXIS_Z), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(LOCKOUT), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(UNLOCK), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(RESET), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(SPINDLE), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(FEEDRATE), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(LCDBRT), TestSelector1, CHANGE);
 
    attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X1), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X10), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X100), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(SET_AXIS_ZERO), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(MACRO1), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(MACRO2), TestSelector2, CHANGE);
 
    for(uint8_t s = 0; s < 12; ++s)
    {
-      if(selector1Pos[s] != 255 && digitalReadFast(selector1Pos[s]) == LOW)
+      if(selector1Pos[s].k != 255 && digitalReadFast(selector1Pos[s].k) == LOW)
       {
          sel1Pos = &selector1Pos[s];
-         Serial.print("sel1 pos:");Serial.println(s);
+         Serial.print("sel1 pos:");Serial.println(sel1Pos->val);
       }
-      if(selector2Pos[s] != 255 && digitalReadFast(selector2Pos[s]) == LOW)
+      if(selector2Pos[s].k != 255 && digitalReadFast(selector2Pos[s].k) == LOW)
       {
          sel2Pos = &selector2Pos[s];
-         Serial.print("sel2 pos:");Serial.println(s);
+         Serial.print("sel2 pos:");Serial.println(sel2Pos->val);
       }
    }
+   UpdateSelectorStates();
 
    if(sel1Pos == NULL)
    {
@@ -345,6 +446,230 @@ void setup()
   Enc.begin(ENC_A, ENC_B, ENC_SW);
   attachInterrupt(digitalPinToInterrupt(ENC_A), EncoderInterrupt, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B), EncoderInterrupt, CHANGE);
+
+  // Button Matrix
+  BM.begin(BMCLK, BMSOL, BMQH);
+  BM.onChangeConnect(HandleButtonChange);
+
+  // TODO: Wait for Grbl to connect
+  //SynchronizeWithGrbl();
+}
+
+void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::ButtonStateType state)
+{
+   if(state == ButtonMatrix::ePressed)
+   {
+      //Serial.print(", P: ");Serial.print(button);Serial.print(", ");Serial.println(state);
+      switch(button)
+      {
+         case(BTN_SHIFT):
+            btnShiftPressed = true;
+            break;
+
+         case(BTN_FEEDHOLD):
+            break;
+
+         case(BTN_CYCLE_START_RESUME):
+            break;
+
+         default:
+            if(sel1Pos->k == SYSTEM)
+            {
+               // System Mode
+               switch(button)
+               {
+                  default:
+                     break;
+               }
+            }
+            else
+            {
+               if(btnShiftPressed == false)
+               {
+                  // Default Mode
+                  switch(button)
+                  {
+                     default:
+                        break;
+                  }
+               }
+               else
+               {
+                  // Default + Shift
+                  switch(button)
+                  {
+                     default:
+                        break;
+                  }
+               }
+            }
+
+            break;
+      }
+   }
+   else if(state == ButtonMatrix::eReleased)
+   {
+      switch(button)
+      {
+         case(BTN_SHIFT):
+            btnShiftPressed = false;
+            break;
+
+         case(BTN_FEEDHOLD):
+            SendToGrbl(GRBL_FEEDHOLD);
+            break;
+
+         case(BTN_CYCLE_START_RESUME):
+            SendToGrbl(GRBL_CYCLESTARTRESUME);
+            break;
+
+         default:
+            if(sel1Pos->k == SYSTEM)
+            {
+               // System mode
+               switch(button)
+               {
+                  case(BTN_HOME):
+                     SendToGrbl(GRBL_HOMING);
+                     break;
+                  case(BTN_UNLOCK):
+                     if(grblState.state == eIdle || grblState.state == eAlarm)
+                     {
+                        SendToGrbl(GRBL_UNLOCK);
+                     }
+                     break;
+                  case(BTN_SOFTRESET):
+                     SendToGrbl(GRBL_SOFTRESET);
+                     break;
+                  case(BTN_SLEEP):
+                     SendToGrbl(GRBL_SLEEP);
+                     break;
+                  case(BTN_FORCE_RESYNC):
+                     RequestGrblStateUpdate(ALLREQ);
+                     break;
+                  case(BTN_TOGGLE_LASER_TEST_MODE):
+                     if(grblState.laserMode == true)
+                     {
+                        if(grblState.spindleState == esM5)
+                        {
+                           SendToGrbl(GRBL_LASER_TESTMODE_ON);
+                        }
+                        else
+                        {
+                           SendToGrbl(GRBL_LASER_TESTMODE_OFF);
+                        }
+                     }
+                     break;
+                  default:
+                     break;
+               }
+            }
+            else
+            {
+               if(btnShiftPressed == false)
+               {
+                  // Default Mode
+                  switch(button)
+                  {            
+                     case(BTN_SetX0):
+                        SendToGrbl(GRBL_SET_X_ZERO);
+                        break;
+                     case(BTN_SetY0):
+                        SendToGrbl(GRBL_SET_Y_ZERO);
+                        break;
+                     case(BTN_SetZ0):
+                        SendToGrbl(GRBL_SET_Z_ZERO);
+                        break;
+
+                     case(BTN_GotoX0):
+                        SendToGrbl(GRBL_JOG_TO_X0);
+                        break;
+                     case(BTN_GotoY0):
+                        SendToGrbl(GRBL_JOG_TO_Y0);
+                        break;
+                     case(BTN_GotoZ0):
+                        SendToGrbl(GRBL_JOG_TO_Z0);
+                        break;
+                     case(BTN_GotoX0Y0):
+                        SendToGrbl(GRBL_JOG_TO_X0Y0);
+                        break;
+
+                     case(BTN_M3M5):
+                        if(grblState.spindleState == esM5)
+                        {
+                           SendToGrbl("M3");
+                        }
+                        else
+                        {
+                           SendToGrbl("M5");
+                        }
+                        break;
+
+                     case(BTN_LaserMode):
+                        // Toggle laser mode
+                        SendToGrbl("G4P0");
+                        if(grblState.laserMode == false)
+                        {
+                           SendToGrbl(GRBL_LASER_MODE_ON);
+                        }
+                        else
+                        {
+                           SendToGrbl(GRBL_LASER_MODE_OFF);
+                        }
+
+                        RequestGrblStateUpdate(EEREQ);
+                        break;
+                     default:
+                        break;
+                  }
+               }
+               else
+               {
+                  // Default + Shift
+                  switch(button)
+                  {
+                     case(BTN_ProbeX):
+                        SendToGrbl(GRBL_PROBE_X);
+                        SendToGrbl(GRBL_SET_X_ZERO);
+                        break;
+                     case(BTN_ProbeY):
+                        SendToGrbl(GRBL_PROBE_Y);
+                        SendToGrbl(GRBL_SET_Y_ZERO);
+                        break;
+                     case(BTN_ProbeZ):
+                        SendToGrbl(GRBL_PROBE_Z);
+                        SendToGrbl(GRBL_SET_Z_ZERO);
+                        break;
+
+                     case(BTN_G54):
+                        SendToGrbl("G54");
+                        break;
+                     case(BTN_G55):
+                        SendToGrbl("G55");
+                        break;
+                     case(BTN_G56):
+                        SendToGrbl("G56");
+                        break;
+                     case(BTN_G57):
+                        SendToGrbl("G57");
+                        break;
+                     case(BTN_G58):
+                        SendToGrbl("G58");
+                        break;
+                     case(BTN_G59):
+                        SendToGrbl("G59");
+                        break;
+
+                     default:
+                        break;
+                  }
+               }
+               
+            }
+
+            break;
+      }
+   }
 }
 
 void EncoderInterrupt()
@@ -357,12 +682,13 @@ void TestSelector1()
    sel1Pos = &emptySel;
    for(uint8_t s = 0; s < 12; ++s)
    {
-      if(selector1Pos[s] != 255 && digitalReadFast(selector1Pos[s]) == LOW)
+      if(selector1Pos[s].k != 255 && digitalReadFast(selector1Pos[s].k) == LOW)
       {
          sel1Pos = &selector1Pos[s];
          break;
       }
    }
+   updateSelectorStates = true;
 }
 
 void TestSelector2()
@@ -370,11 +696,194 @@ void TestSelector2()
    sel2Pos = &emptySel;
    for(uint8_t s = 0; s < 12; ++s)
    {
-      if(selector2Pos[s] != 255 && digitalReadFast(selector2Pos[s]) == LOW)
+      if(selector2Pos[s].k != 255 && digitalReadFast(selector2Pos[s].k) == LOW)
       {
          sel2Pos = &selector2Pos[s];
          break;
       }
+   }
+   updateSelectorStates = true;
+}
+
+uint16_t interpolateFeedRateFromStepTimeDelta(float x, float in_min, float in_max, uint16_t out_min, uint16_t out_max)
+{
+  return (in_min - x) * (out_max - out_min) / (in_min - in_max) + out_min;
+}
+
+void Jog_WheelSpeedVsFeedRate(time_t delta, int8_t dir, float &f, float &s)
+{
+   delta = delta < 10 ? 10 : delta;
+   f = interpolateFeedRateFromStepTimeDelta(delta, 100.0, 10.0, JOG_MIN_SPEED, JOG_MAX_SPEED);
+   // Convert feed rate from mm/min to mm/sec
+   float v(f / 60.0);
+   // Update AXES_ACCEL so it uses the value for the
+   // selected axis.
+   float dt = ((v * v) / (2.0 * AXES_ACCEL[0] * 14));
+   //Serial.print("dt: ");Serial.println(dt);
+   s = (v * dt) * dir;
+   s /= 10;
+}
+
+//void Jog_StepsPerRevolution(time_t delta, int8_t dir, float &f, float &s)
+//{
+//   // UNTESTED. Left here for possible future development.
+//  if(delta > _commandIntervalDelay)
+//  {
+//      s = _EncSteps / _resolution;
+//  }
+//  f = 500; // Need to make this more dynamic
+//}
+
+
+// This is where the magic happens. The encoder wheel
+// pulses are translated into motion commands for GRBL.
+//
+// DO NOT USE THE println() method when sending
+// data to GRBL. It injects both the \r and \n
+// bytes to the line end and it causes GRBL to
+// interpret this as 2 separate lines, causing
+// extra overhead. Instead add the \n byte to
+// the end of the formatted string and send it
+// like so.
+
+void ProcessEncoderRotation(int8_t steps)
+{
+   // Trick the code into thinking grbl is connected.
+   // Used when testing this block of code by itself.
+   //grblState.state = eJog;
+
+   time_t uSecs(Enc.GetuSecs());
+   time_t olduSecs(Enc.GetOlduSecs());
+   // 
+   if(grblState.jogging == true)
+   {
+      if(millis() - uSecs > 200)
+      {
+         grblState.jogging = false;
+         // Send from here, no delay.
+         userial.write(0x85);
+         //userial.println("G4P0");
+         //Serial.println("STOP");
+      }
+   }
+   if((grblState.state == eJog || grblState.state == eIdle) && steps != 0 &&
+      (sel1Pos->k == AXIS_X || sel1Pos->k == AXIS_Y || sel1Pos->k == AXIS_Z))
+   {
+      int8_t dir(steps > 0 ? 1 : -1);
+      const char *XYZ(sel1Pos->k == AXIS_X ? "X" : sel1Pos->k == AXIS_Y ? "Y" : "Z");
+      if(sel2Pos->k == JOG)
+      {
+         time_t delta(uSecs - olduSecs);
+         float f(0); // Feed rate (mm / min)
+         float s(0); // Travel distance (mm)
+         if(delta > 100)
+         {
+            // Slow commands in jog mode that
+            // are treated as fixed step inputs of
+            // a short distance. Allows precise
+            // and repeatable motion at small scale.
+            s = 0.1 * dir;
+            f = 1000;
+         }
+         else
+         {
+            grblState.jogging = true;
+            
+            Jog_WheelSpeedVsFeedRate(delta, dir, f, s);
+            //Jog_StepsPerRevolution(delta, dir, f, s);
+         }
+         
+         sprintf(grblJogCommand, "$J=G91F%.3f%s%.3f", f, XYZ, s);
+         SendToGrbl(grblJogCommand);
+      }
+      else if(sel2Pos->k == XP1)
+      {
+         sprintf(grblJogCommand, "$J=G91F1000%s%.3f", XYZ, 0.1 * dir);
+         SendToGrbl(grblJogCommand);
+      }
+      else if(sel2Pos->k == X1)
+      {
+         sprintf(grblJogCommand, "$J=G91F1000%s%d", XYZ, dir);
+         SendToGrbl(grblJogCommand);
+      }
+      else if(sel2Pos->k == X10)
+      {
+         sprintf(grblJogCommand, "$J=G91F3000%s%d", XYZ, 10 * dir);
+         SendToGrbl(grblJogCommand);
+      }
+      else if(sel2Pos->k == X100 && sel1Pos->k != AXIS_Z)// _EncSteps != 0)
+      {
+         // 100 is too big for the Z axis. Allow this only for X and Y.
+         sprintf(grblJogCommand, "$J=G91F5000%s%d", XYZ, 100 * dir);
+         SendToGrbl(grblJogCommand);
+      }
+   }
+   else if(sel1Pos->k == SPINDLE && steps != 0 && grblState.maxSpindleSpeed != 0 &&
+           (sel2Pos->k == X1 || sel2Pos->k == X10 || sel2Pos->k == X100))
+   {
+      int16_t cmd(steps);
+      if(sel2Pos->k == X10)
+      { 
+         cmd *= 10;
+      }
+      else if(sel2Pos->k == X100)
+      { 
+         cmd *= 100;
+      }
+      grblState.cmdSpindleSpeed += cmd;
+      if(grblState.cmdSpindleSpeed > grblState.maxSpindleSpeed)
+      {
+         grblState.cmdSpindleSpeed = grblState.maxSpindleSpeed;
+      }
+      else if(grblState.cmdSpindleSpeed < 0)
+      {
+         grblState.cmdSpindleSpeed = 0;
+      }
+      UpdateSpindleDisplay();
+   }
+   else if(sel1Pos->k == FEEDRATE && steps != 0 &&
+           (sel2Pos->k == X1 || sel2Pos->k == X10 || sel2Pos->k == X100))
+   {
+      int16_t cmd(steps);
+      if(sel2Pos->k == X10)
+      { 
+         cmd *= 10;
+      }
+      else if(sel2Pos->k == X100)
+      { 
+         cmd *= 100;
+      }
+      grblState.cmdFeedRate += cmd;
+      if(grblState.cmdFeedRate > grblState.axisMaxRate[0])
+      {
+         grblState.cmdFeedRate = grblState.axisMaxRate[0];
+      }
+      else if(grblState.cmdFeedRate < 0)
+      {
+         grblState.cmdFeedRate = 0;
+      }
+      UpdateFeedRateDisplay();
+   }
+   else if(sel1Pos->k == LCDBRT && steps != 0 &&
+           (sel2Pos->k == X1 || sel2Pos->k == X10 || sel2Pos->k == X100))
+   {
+      int16_t cmd(lcdBrightness);
+      if(sel2Pos->k == X10)
+      {
+         steps *= 10;
+      }
+      else if(sel2Pos->k == X100)
+      {
+         steps *= 100;
+      }
+
+      cmd += steps;
+
+      lcdBrightness = (cmd > 255 ? 255 : cmd < 0 ? 0 : cmd);
+      analogWrite(TFT_BL, lcdBrightness);
+
+      UpdateLCDBrightnessIndication();
+      tft.updateScreenAsync();
    }
 }
 
@@ -391,7 +900,7 @@ void MonitorUSBDevices()
             sprintf(buf, "*** Device %s - disconnected ***\n", driver_names[i]);
             driver_active[i] = false;
             //Serial.print(buf);
-            grblState = eUnkownState;
+            grblState.state = eUnknownState;
             AddLineToCommandTerminal(buf);
          }
          else
@@ -445,13 +954,12 @@ char ReadUSBSerial()
 
 void ParseConnected(char *line)
 {
-   grblState = eConnected;
-   AddLineToGrblTerminal(line);
-   // Request current state and settings from Grbl.
-   SendToGrbl(GRBL_VIEWSETTIMGS);
-   SendToGrbl(GRBL_PARAMETERS);
-   SendToGrbl(GRBL_GCODEPARSER);
-   userial.write(GRBL_STATUSREPORT);
+   grblState.state = eConnected;
+   if(line != NULL)
+   {
+      AddLineToGrblTerminal(line);
+   }
+   RequestGrblStateUpdate(ALLREQ);
 }
 
 uint16_t ParseStatusMessage(char *msg)
@@ -487,6 +995,7 @@ uint16_t ParseStatusMessage(char *msg)
    {
       statusValues[eStatus] = statusFields[0];
 
+      //<Idle|MPos:0.000,0.000,0.000|FS:0.0,0|WCO:13.0,6.0,2.0>            
       for(uint8_t i = 0; i < f; ++i)
       {
          if(strstr(statusFields[i], "MPos") != NULL)
@@ -495,20 +1004,25 @@ uint16_t ParseStatusMessage(char *msg)
             
             ch = strtok(NULL, ":,");
             statusValues[eMPosX] = ch;
+            grblState.MPOS[0] = atof(statusValues[eMPosX]);
             ch = strtok(NULL, ":,");
             statusValues[eMPosY] = ch;
+            grblState.MPOS[1] = atof(statusValues[eMPosY]);
             ch = strtok(NULL, ":,");
             statusValues[eMPosZ] = ch;
+            grblState.MPOS[2] = atof(statusValues[eMPosZ]);
          }
          else if(strstr(statusFields[i], "F") != NULL)
          {
             char *ch = strtok(statusFields[i], ":,");
             ch = strtok(NULL, ":,");
+            grblState.currentFeedRate = atof(ch);
             statusValues[eFeed] = ch;
             
             if(strstr(statusFields[i], "FS") != NULL)
             {
                ch = strtok(NULL, ":,");
+               grblState.currentSpindleSpeed = atof(ch);
                statusValues[eSpindle] = ch;
             }
          }
@@ -517,8 +1031,10 @@ uint16_t ParseStatusMessage(char *msg)
             char *ch = strtok(statusFields[i], ":,");
             
             ch = strtok(NULL, ":,");
+            grblState.plannerBlocksAvailable = atoi(ch);
             statusValues[ePlanner] = ch;
             ch = strtok(NULL, ":,");
+            grblState.rxBufferBytesAvailable = atoi(ch);
             statusValues[eRXBytes] = ch;
          }
          else if(strstr(statusFields[i], "Ln") != NULL)
@@ -533,10 +1049,13 @@ uint16_t ParseStatusMessage(char *msg)
             char *ch = strtok(statusFields[i], ":,");
             
             ch = strtok(NULL, ":,");
+            grblState.feedOverride = atoi(ch);
             statusValues[eOVFeed] = ch;
             ch = strtok(NULL, ":,");
+            grblState.rapidOverride = atoi(ch);
             statusValues[eOVRapid] = ch;
             ch = strtok(NULL, ":,");
+            grblState.spindleOverride = atoi(ch);
             statusValues[eOVSpindle] = ch;
          }
          else if(strstr(statusFields[i], "WCO") != NULL)
@@ -545,10 +1064,13 @@ uint16_t ParseStatusMessage(char *msg)
 
             ch = strtok(NULL, ":,");
             statusValues[eWCOX] = ch;
+            grblState.WCO[0] = atof(statusValues[eWCOX]);
             ch = strtok(NULL, ":,");
             statusValues[eWCOY] = ch;
+            grblState.WCO[1] = atof(statusValues[eWCOY]);
             ch = strtok(NULL, ":,");
             statusValues[eWCOZ] = ch;
+            grblState.WCO[2] = atof(statusValues[eWCOZ]);
          }
          else if(strstr(statusFields[i], "Pn") != NULL)
          {
@@ -566,18 +1088,291 @@ uint16_t ParseStatusMessage(char *msg)
    return(p);
 }
 
+void ParseGCodeParserState(char *line)
+{
+   // [GC:G0 G54 G17 G21 G90 G94 M0 M5 M9 T0 F500.0 S0.0]
+   // Find the end of the header (:)
+   char *ch(strtok(line, ":"));
+   ch = strtok(NULL, " ");
+   if(ch[1] == '0')
+   {
+      grblState.motionMode = emG0;
+   }
+   else if(ch[1] == '1')
+   {
+      grblState.motionMode = emG1;
+   }
+   else if(ch[1] == '2')
+   {
+      grblState.motionMode = emG2;
+   }
+   else if(ch[1] == '3')
+   {
+      if(ch[2] == '\0')
+      {
+         grblState.motionMode = emG3;
+      }
+      else
+      {
+         if(ch[4] == '2')
+         {
+            grblState.motionMode = emG38_2;
+         }
+         else if(ch[4] == '3')
+         {
+            grblState.motionMode = emG38_3;
+         }
+         else if(ch[4] == '4')
+         {
+            grblState.motionMode = emG38_4;
+         }
+         else if(ch[4] == '5')
+         {
+            grblState.motionMode = emG38_5;
+         }
+      }
+   }
+   else if(ch[1] == '8')
+   {
+      grblState.motionMode = emG80;
+   }
+
+   // Find the active workspace
+   ch = strtok(NULL, " ");
+   for(uint8_t s = 0; s < ecRange; ++s)
+   {
+      if(strncmp(ch, grblState.workSpace[s].id, 3) == 0)
+      {
+         grblState.activeWorkspace = &grblState.workSpace[s];
+         break;
+      }
+   }
+
+   // Plane
+   ch = strtok(NULL, " ");
+   //Serial.print("P:");Serial.println(ch);
+   // Units
+   ch = strtok(NULL, " ");
+   //Serial.print("U:");Serial.println(ch);
+   // Distance mode
+   ch = strtok(NULL, " ");
+   //Serial.print("D:");Serial.println(ch);
+   // Feed rate mode
+   ch = strtok(NULL, " ");
+   //Serial.print("F:");Serial.println(ch);
+   // Program mode -- WHY NO MODE???
+   //ch = strtok(NULL, " ");
+   //Serial.print("R:");Serial.println(ch);
+   // Spindle state
+   ch = strtok(NULL, " ");
+   //Serial.print("M:");Serial.println(ch);
+   if(strncmp(ch, "M3", 2) == 0)
+   {
+      grblState.spindleState = esM3;
+   }
+   else if(strncmp(ch, "M4", 2) == 0)
+   {
+      grblState.spindleState = esM4;
+   }
+   else if(strncmp(ch, "M5", 2) == 0)
+   {
+      grblState.spindleState = esM5;
+   }
+   // Coolant state
+   ch = strtok(NULL, " ");
+   //Serial.print("C:");Serial.println(ch);
+   // Tool number
+   ch = strtok(NULL, " ");
+   //Serial.print("T:");Serial.println(ch);
+   // Feed rate
+   ch = strtok(NULL, " ");
+   grblState.programmedFeedRate = atof(&ch[1]);
+   UpdateFeedRateDisplay();
+   //Serial.print("f:");Serial.println(ch);
+   // Spindle speed
+   ch = strtok(NULL, "]");
+   //Serial.print("ss:");Serial.print(ch);Serial.print(":");Serial.println(&ch[1]);
+   grblState.programmedSpindleSpeed = atof(&ch[1]);
+   UpdateSpindleDisplay();
+
+   grblState.requestGCUpdate = 3;
+   UpdateParameterDisplay();
+}
+
+void ParseGCodeParameters(char *line)
+{
+   // The line coming in here must not have
+   // the opening brace removed. Otherwise
+   // it will be removed here.
+   if(line[0] == '[')
+   {
+      line = &line[1];
+   }
+   //[G54:4.000,0.000,0.000]
+   //[G55:4.000,6.000,7.000]
+   //[G56:0.000,0.000,0.000]
+   //[G57:0.000,0.000,0.000]
+   //[G58:0.000,0.000,0.000]
+   //[G59:0.000,0.000,0.000]
+   //[G28:1.000,2.000,0.000]
+   //[G30:4.000,6.000,0.000]
+   //[G92:0.000,0.000,0.000]
+   //[TLO:0.000]
+   //[PRB:0.000,0.000,0.000:0]
+
+   char *ch(strtok(line, ":"));
+   if(ch[0] == 'T')
+   {
+      ch = strtok(NULL, "]");
+      grblState.TLO = atof(ch);
+   }
+   else
+   {
+      idP3t *p(nullptr);
+      if(ch[0] == 'P')
+      {
+         p = &grblState.probe;
+         strncpy(p->id, ch, sizeof(p->id));
+         grblState.requestWSUpdate = 3;
+      }
+      else if(ch[1] == '5')
+      {
+         uint8_t n(ch[2] - '0');
+         p = &grblState.workSpace[n - 4];
+         strncpy(p->id, ch, sizeof(p->id));
+      }
+      else if(ch[1] == '2')
+      {
+         p = &grblState.park28;
+         strncpy(p->id, ch, sizeof(p->id));
+      }
+      else if(ch[1] == '3')
+      {
+         p = &grblState.park30;
+         strncpy(p->id, ch, sizeof(p->id));
+      }
+      else if(ch[1] == '9')
+      {
+         p = &grblState.offset92;
+         strncpy(p->id, ch, sizeof(p->id));
+      }
+
+      ch = strtok(NULL, ",");
+      p->val3[0] = atof(ch);
+      ch = strtok(NULL, ",");
+      p->val3[1] = atof(ch);
+      ch = strtok(NULL, "]");
+      p->val3[2] = atof(ch);
+   }
+}
+
+void ParseBuildOptions(char *line)
+{
+   // [VER:1.1h.20190830:TEST]
+   // [OPT:V,15,128]
+   char *ch(strtok(line, ":"));
+
+   if(ch[1] == 'V')
+   {
+      // Parse version data
+   }
+   else if(ch[1] == 'O')
+   {
+      // Skip the build options.
+      ch = strtok(NULL, ",");
+      // Planner block count
+      ch = strtok(NULL, ",");
+      grblState.plannerBlockCount = atoi(ch);
+      // rx Buffer size
+      ch = strtok(NULL, "]");
+      grblState.rxBufferSize = atoi(ch);
+
+      grblState.requestBDUpdate = 3;
+   }
+}
+
 void ParseBracketMessage(char *line)
 {
-   uint8_t breaks((strlen(line) / (tCOLS - 1)) + 1);
-   for(uint8_t l = 0; l < breaks; ++l)
+   AddLineToGrblTerminal(line);
+   
+   if(strncmp(line, "[GC:", 4) == 0)
    {
-      AddLineToGrblTerminal(&line[l * (tCOLS - 1)]);
+      ParseGCodeParserState(line);
+   }
+   else if(strncmp(line, "[G", 2) == 0 ||
+           strncmp(line, "[TLO:", 5) == 0 ||
+           strncmp(line, "[PRB:", 5) == 0)
+   {
+      // Skip the opening bracket
+      ParseGCodeParameters(&line[1]);
+   }
+   else if(strncmp(line, "[OPT:", 5) == 0 ||
+           strncmp(line, "[VER:", 5) == 0)
+   {
+      ParseBuildOptions(line);
    }
 }
 
 void ParseEEPROMData(char *line)
 {
-   
+   AddLineToGrblTerminal(line);
+
+   // Capture values we need.
+   char *ch(strtok(line, "="));
+   char *val = strtok(NULL, "");
+
+   if(strncmp(ch, "$30", 3) == 0)
+   {
+      grblState.maxSpindleSpeed = atof(val);
+      char msg[tCOLS] = { '\0' };
+      sprintf(msg, "Max Spindle Speed: %.1f", grblState.maxSpindleSpeed);
+      AddLineToCommandTerminal(msg);
+   }
+   else if(strncmp(ch, "$32", 3) == 0)
+   {
+      grblState.laserMode = atoi(val) == 0 ? false : true;
+      char msg[tCOLS] = { '\0' };
+      sprintf(msg, "Laser Mode: %s", grblState.laserMode ? "On" : "Off");;
+      AddLineToCommandTerminal(msg);
+   }
+   else if(strncmp(ch, "$110", 4) == 0)
+   {
+      grblState.axisMaxRate[0] = atof(val);
+   }
+   else if(strncmp(ch, "$111", 4) == 0)
+   {
+      grblState.axisMaxRate[1] = atof(val);
+   }
+   else if(strncmp(ch, "$112", 4) == 0)
+   {
+      grblState.axisMaxRate[2] = atof(val);
+   }
+   else if(strncmp(ch, "$120", 4) == 0)
+   {
+      grblState.axisMaxAccel[0] = atof(val);
+   }
+   else if(strncmp(ch, "$121", 4) == 0)
+   {
+      grblState.axisMaxAccel[1] = atof(val);
+   }
+   else if(strncmp(ch, "$122", 4) == 0)
+   {
+      grblState.axisMaxAccel[2] = atof(val);
+   }
+   else if(strncmp(ch, "$130", 4) == 0)
+   {
+      grblState.axisMaxTravel[0] = atof(val);
+   }
+   else if(strncmp(ch, "$131", 4) == 0)
+   {
+      grblState.axisMaxTravel[1] = atof(val);
+   }
+   else if(strncmp(ch, "$132", 4) == 0)
+   {
+      grblState.axisMaxTravel[2] = atof(val);
+      grblState.requestEEUpdate = 3;
+      UpdateCommandTerminal();
+   }
 }
 
 uint16_t ParseOther(char *msg)
@@ -622,13 +1417,68 @@ uint16_t ParseOther(char *msg)
    return(0);
 }
 
+void RefreshScreen()
+{
+   Blank();
+   UpdateGrblTerminal();
+   UpdateCommandTerminal();
+   UpdateStatusDisplay();
+   UpdateSelectorStates();
+   UpdateParameterDisplay();
+
+   if(sel1Pos != nullptr && sel1Pos->k == LCDBRT)
+   {
+      UpdateLCDBrightnessIndication();
+   }
+
+}
+
 void UpdateClockDisplay()
 {
-   tft.fillRect(380, 0, 100, 15, ILI9488_BLACK);
-   tft.setCursor(350, 0);
-   tft.setTextColor(ILI9488_WHITE);
-   tft.setTextSize(2);
-   tft.print("Hello:");tft.print((time_t)(millis() / 1000));
+   tft.fillCircle(16, 16, 10, ILI9488_RED);
+   if(heartBeatTimeout > 1000)
+   {
+      heartBeatTimeout -= 1000;
+      tft.fillCircle(16, 16, 8, ILI9488_BLACK);
+   }
+
+   tft.fillCircle(46, 16, 10, ILI9488_BLUE);
+   if(grblState.laserMode == false)
+   {
+      tft.fillCircle(46, 16, 8, ILI9488_BLACK);
+   }
+
+   tft.fillRect(72, 20, 8, 8, btnShiftPressed ? ILI9488_WHITE : ILI9488_BLACK);
+   tft.fillTriangle(66, 20, 76, 10, 86, 20, btnShiftPressed ? ILI9488_WHITE : ILI9488_BLACK);
+
+   if(updateSelectorStates == true)
+   {
+      updateSelectorStates = false;
+      UpdateSelectorStates();
+      if(sel1Pos != nullptr)
+      {
+         if(sel1Pos->k == LCDBRT)
+         {
+            UpdateLCDBrightnessIndication();
+         }
+         else
+         {
+            UpdateLCDBrightnessIndication(true);
+         }
+      }
+   }
+}
+
+void UpdateLCDBrightnessIndication(bool clear)
+{
+   tft.fillRect(330, 144, 40, 16, ILI9488_BLACK);
+   if(clear == false)
+   {
+      tft.setTextColor(ILI9488_LIGHTGREY, ILI9488_BLACK);
+      tft.setTextSize(2);
+      tft.setCursor(330, 144);
+      tft.print(lcdBrightness);
+   }
 }
 
 void Text(uint16_t x, uint16_t y, const char *text)
@@ -639,13 +1489,28 @@ void Text(uint16_t x, uint16_t y, const char *text)
 
 void Blank()
 {
-   tft.fillScreen(ILI9488_BLACK);
-   tft.setTextSize(2);
-   tft.setCursor(300, 16);
-   tft.print("Status");
 
-   Text(240, 32, "Machine Position");
-   Text(240, 64, "Work Position");
+   tft.fillScreen(ILI9488_BLACK);
+
+   //int16_t x, y;//, x1, y1;
+   //uint16_t w, h;
+   //tft.setTextSize(1);
+   //   tft.getTextBounds("H", 0, 0, &x, &y, &w, &h);
+   //tft.setCursor(200, 160);
+   //tft.print("H ");tft.print(w);tft.print("-");tft.print(h);
+   //tft.setTextSize(2);
+   //   tft.getTextBounds("H", 0, 0, &x, &y, &w, &h);
+   //tft.setCursor(200, 176);
+   //tft.print("H ");tft.print(w);tft.print("-");tft.print(h);
+   //tft.setTextSize(3);
+   //   tft.getTextBounds("8", 0, 0, &x, &y, &w, &h);
+   //tft.setCursor(200, 208);
+   //tft.print("H ");tft.print(w);tft.print("-");tft.print(h);
+
+   tft.setTextSize(3);
+   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+   Text(287, 30, "MPOS");
+   Text(397, 30, "WPOS");
 }
 
 void DrawTestPattern()
@@ -669,112 +1534,135 @@ void UpdateStatusDisplay()
 {
    if(statusValues[eStatus] != NULL)
    {
-      tft.setTextColor(ILI9488_WHITE);
-
-      int16_t x, y, x1, y1;
+      int16_t x, y;
       uint16_t w, h;
-      tft.fillRect(tft.width() - 100, 16, 100, 16, ILI9488_BLACK);
-      tft.setTextSize(2);
+      tft.fillRect(340, 0, tft.width() - 340, 24, ILI9488_BLACK);
+      tft.setTextSize(3);
       tft.getTextBounds(statusValues[eStatus], 0, 0, &x, &y, &w, &h);
-      tft.setCursor(tft.width() - w, 16);
+      x = tft.width() - w;
+      y = 0;
       if(CompareStrings(statusValues[eStatus], "Alarm"))
       {
-         grblState = eAlarm;
+         grblState.state = eAlarm;
          tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
       }
       else if(CompareStrings(statusValues[eStatus], "Door")  ||
               CompareStrings(statusValues[eStatus], "Door:1") ||
               CompareStrings(statusValues[eStatus], "Door:2"))
       {
-         grblState = eDoor;
+         grblState.state = eDoor;
          tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
       }
       else if(CompareStrings(statusValues[eStatus], "Idle"))
       {
-         grblState = eIdle;
+         grblState.state = eIdle;
          tft.setTextColor(ILI9488_BLACK, ILI9488_YELLOW);
       }
       else if(CompareStrings(statusValues[eStatus], "Run"))
       {
-         grblState = eRun;
+         grblState.state = eRun;
          tft.setTextColor(ILI9488_BLACK, ILI9488_LIGHTGREEN);
       }
       else if(CompareStrings(statusValues[eStatus], "Check"))
       {
-         grblState = eCheck;
+         grblState.state = eCheck;
          tft.setTextColor(ILI9488_BLACK, ILI9488_MAGENTA);
       }
       else if(CompareStrings(statusValues[eStatus], "Sleep"))
       {
-         grblState = eSleep;
+         grblState.state = eSleep;
          tft.setTextColor(ILI9488_BLACK, ILI9488_DARKCYAN);
       }
       else if(CompareStrings(statusValues[eStatus], "Jog"))
       {
-         grblState = eJog;
+         grblState.state = eJog;
          tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
       }
       else if(CompareStrings(statusValues[eStatus], "Home"))
       {
-         grblState = eHome;
+         grblState.state = eHome;
          tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
       }
       else if(CompareStrings(statusValues[eStatus], "Hold") ||
               CompareStrings(statusValues[eStatus], "Hold:0"))
       {
-         grblState = eHold;
+         grblState.state = eHold;
          tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
       }
       else if(CompareStrings(statusValues[eStatus], "Hold:1"))
       {
-         grblState = eHold;
+         grblState.state = eHold;
          tft.setTextColor(ILI9488_BLACK, ILI9488_MAROON);
       }
       else if(CompareStrings(statusValues[eStatus], "Queue") || // <--- What's the deal with this guy...
               CompareStrings(statusValues[eStatus], "Door:0") ||
               CompareStrings(statusValues[eStatus], "Door:3"))
       {
-         grblState = eDoor;
+         grblState.state = eDoor;
          tft.setTextColor(ILI9488_BLACK, ILI9488_MAROON);
       }
       else
       {
-         grblState = eUnkownState;
+         grblState.state = eUnknownState;
          tft.setTextColor(ILI9488_BLACK, ILI9488_WHITE);
       }
-      tft.print(statusValues[eStatus]);
+      Text(x, y, statusValues[eStatus]);
 
-      if(statusValues[eMPosX] != NULL)
-      {
-         y = 48;
-         tft.fillRect(140, y, tft.width() - 140, 16, ILI9488_BLACK);
-         
-         tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
-         char s[32] = { '\0' };
-         sprintf(s, "%s, %s, %s", statusValues[eMPosX], statusValues[eMPosY], statusValues[eMPosZ]);
-         tft.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-         x = tft.width() - w;
-         Text(x, y, s);
-         
-         if(statusValues[eWCOX] != NULL)
-         {
-            y = 80;
-            tft.fillRect(140, y, tft.width() - 140, 16, ILI9488_BLACK);
-            sprintf(s, "%.3f, %.3f, %.3f", atof(statusValues[eMPosX]) - atof(statusValues[eWCOX]), atof(statusValues[eMPosY]) - atof(statusValues[eWCOY]), atof(statusValues[eMPosZ]) - atof(statusValues[eWCOZ]));
-            tft.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-            x = tft.width() - w;
-            Text(x, y, s);
-         }
-      }
+      char s[32] = { '\0' };
+      x = 252;
+      y = 52;
+      
+      tft.setTextSize(2);
+      tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
+      sprintf(s, "X %8.3f %8.3f", grblState.MPOS[0], grblState.MPOS[0] - grblState.WCO[0]);
+      Text(x, y, s);
+      y = 68;
+      sprintf(s, "Y %8.3f %8.3f", grblState.MPOS[1], grblState.MPOS[1] - grblState.WCO[1]);
+      Text(x, y, s);
+      y = 84;
+      sprintf(s, "Z %8.3f %8.3f", grblState.MPOS[2], grblState.MPOS[2] - grblState.WCO[2]);
+      Text(x, y, s);
 
-      if(statusValues[eFeed] != NULL)
+
+      tft.setTextSize(1);
+      tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+
+      x = 128;
+      y = 8;
+      if(grblState.plannerBlocksAvailable > 12)
       {
-         x = 180;
-         y = 0;
-         tft.fillRect(x, y, 100, 16, ILI9488_BLACK);
-         Text(x, y, statusValues[eFeed]);
+         tft.setTextColor(ILI9488_GREEN, ILI9488_BLACK);
       }
-   
+      else if(grblState.plannerBlocksAvailable > 6)
+      {
+         tft.setTextColor(ILI9488_YELLOW, ILI9488_BLACK);
+      }
+      else
+      {
+         tft.setTextColor(ILI9488_RED, ILI9488_BLACK);
+      }
+      sprintf(s, "BL %02d/%02d", grblState.plannerBlocksAvailable, grblState.plannerBlockCount);
+      Text(x, y, s);
+
+      y = 16;
+      if(grblState.rxBufferBytesAvailable > 96)
+      {
+         tft.setTextColor(ILI9488_GREEN, ILI9488_BLACK);
+      }
+      else if(grblState.rxBufferBytesAvailable > 32)
+      {
+         tft.setTextColor(ILI9488_YELLOW, ILI9488_BLACK);
+      }
+      else
+      {
+         tft.setTextColor(ILI9488_RED, ILI9488_BLACK);
+      }
+      sprintf(s, "RX %03d/%03d", grblState.rxBufferBytesAvailable, grblState.rxBufferSize);
+      Text(x, y, s);
+
+      UpdateFeedRateDisplay();
+      UpdateSpindleDisplay();
+
       //tft.setTextSize(1);
       //tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
       //for(uint8_t i = 1; i < eStatusRange; ++i)
@@ -790,19 +1678,99 @@ void UpdateStatusDisplay()
    }
 }
 
+void UpdateSelectorStates()
+{
+   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+   tft.setTextSize(2);
+   uint16_t x = 300;
+   uint16_t y = 160;
+   tft.fillRect(x, y, tft.width() - x, 20, ILI9488_BLACK);
+   tft.drawRect(x, y, 102, 20, ILI9488_CYAN);
+   x = 305;
+   y = 162;
+
+   if(sel1Pos != nullptr)
+   {
+      if(sel1Pos->k == SYSTEM)
+      {
+         tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
+      }
+      Text(x, y, sel1Pos->val);
+   }
+
+   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+
+   x = 415;
+   y = 160;
+   tft.drawRect(x, y, tft.width() - x, 20, ILI9488_PURPLE);
+   x = 420;
+   y = 162;
+   if(sel2Pos != nullptr)
+   {
+      Text(x, y, sel2Pos->val);
+   }
+}
+
+void UpdateFeedRateDisplay()
+{
+   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+   tft.setTextSize(1);
+   uint16_t x = 332;
+   uint16_t y = 112;
+   char s[32] = { '\0' };
+   sprintf(s, "F:%04ld,%7.2f,%7.2f", grblState.cmdFeedRate, grblState.programmedFeedRate, grblState.currentFeedRate);
+   Text(x, y, s);
+}
+
+void UpdateSpindleDisplay()
+{
+   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+   tft.setTextSize(1);
+   uint16_t x = 332;
+   uint16_t y = 122;
+   char s[32] = { '\0' };
+   sprintf(s, "S:%05ld,%7.1f,%7.1f", grblState.cmdSpindleSpeed, grblState.programmedSpindleSpeed, grblState.currentSpindleSpeed);
+   Text(x, y, s);
+}
+
+void UpdateParameterDisplay()
+{
+   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+   uint16_t x = 240;
+   uint16_t y = 0;
+   if(grblState.activeWorkspace != nullptr && grblState.activeWorkspace->id[0] != '\0')
+   {
+      tft.setTextSize(3);
+      Text(x, y, grblState.activeWorkspace->id);
+   }
+   
+   //tft.setTextSize(1);
+   //y = 8;
+   ////tft.fillRect(x, y, 100, 8, ILI9488_BLACK);
+   //sprintf(s, "%s:%.3f,%.3f,%.3f", grblState.park28.id, grblState.park28.val3[0], grblState.park28.val3[1], grblState.park28.val3[2]);
+   //Text(x, y, s);
+   //y = 16;
+   ////tft.fillRect(x, y, 100, 8, ILI9488_BLACK);
+   //sprintf(s, "%s:%.3f,%.3f,%.3f", grblState.park30.id, grblState.park30.val3[0], grblState.park30.val3[1], grblState.park30.val3[2]);
+   //Text(x, y, s);
+}
+
 void UpdateGrblTerminal()
 {
    tft.setTextSize(1);
 
    int16_t x, y;
    uint16_t cw, ch;
-   tft.getTextBounds("0", 0, 0, &x, &y, &cw, &ch);
-   tft.fillRect(0, 0, cw * tCOLS - 1, tft.height(), ILI9488_OLIVE);
-
    int8_t r = tROWS - 1;
+
+   tft.getTextBounds("0", 0, 0, &x, &y, &cw, &ch);
+   //tft.fillRect(0, 0, cw * tCOLS - 1, tft.height(), ILI9488_OLIVE);
+   tft.fillRect(0, 48, cw * tCOLS - 1, tft.height() - 48, ILI9488_BLACK);
+   tft.drawRect(0, 48, cw * tCOLS - 1, tft.height() - 48, ILI9488_OLIVE);
+
    while(r >= 0)
    {
-      if(terminal[r] != NULL)
+      if(terminal[r] != NULL && r > 5)
       {
          if(strcmp(terminal[r], "ok") == 0)
          {
@@ -837,26 +1805,28 @@ void UpdateGrblTerminal()
       }
       --r;
    }
-   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
 }
 
 void UpdateCommandTerminal()
 {
    tft.setTextSize(1);
 
-   int16_t x(280), y(96);
+   int16_t x(300), y(192);
    uint16_t cw, ch;
    uint8_t rmax((tft.height() - y) / 8);
+   uint8_t rend(cROWS - rmax);
 
    tft.getTextBounds("0", 0, 0, &x, &y, &cw, &ch);
-   tft.fillRect(280, 96, cw * tCOLS - 1, tft.height(), ILI9488_OLIVE);
-   int8_t r = rmax - 1;
+   tft.fillRect(300, 192, cw * tCOLS - 1, tft.height() - 192, ILI9488_BLACK);
+   tft.drawRect(300, 192, cw * tCOLS - 1, tft.height() - 192, ILI9488_OLIVE);
+   int8_t r = cROWS - 1;
    y = (tft.height() - ch);
+   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
    while(r >= 0)
    {
-      if(cmdTerminal[r] != NULL)
+      if(cmdTerminal[r] != NULL && r >= rend)
       {
-         Text(280, y, cmdTerminal[r]);
+         Text(300, y, cmdTerminal[r]);
       }
       --r;
       y -= ch;
@@ -896,6 +1866,14 @@ void ProcessLineFromGrbl()
    }
 }
 
+void SendToGrbl(uint8_t b)
+{
+   // Single byte commands go out this way.
+   userial.write(b);
+   //AddLineToCommandTerminal(b);
+   //UpdateCommandTerminal();
+}
+
 void SendToGrbl(const char *msg)
 {
    // The Arduino's println method in the Stream class
@@ -906,10 +1884,100 @@ void SendToGrbl(const char *msg)
    userial.print(msg);
    userial.print('\n');
    ++grblLinesSent;
+
+   if(strstr(msg, "G54") != NULL ||
+      strstr(msg, "G55") != NULL ||
+      strstr(msg, "G56") != NULL ||
+      strstr(msg, "G57") != NULL ||
+      strstr(msg, "G58") != NULL ||
+      strstr(msg, "G59") != NULL)
+   {
+      // Force an update of the active workspace.
+      RequestGrblStateUpdate(GCREQ | WSREQ);
+   }
+   else if(strstr(msg, "M3") != NULL ||
+           strstr(msg, "M4") != NULL ||
+           strstr(msg, "M5") != NULL)
+   {
+      RequestGrblStateUpdate(GCREQ);
+   }
+   AddLineToCommandTerminal(msg);
+   UpdateCommandTerminal();
+}
+
+void RequestGrblStateUpdate(uint8_t type)
+{
+   grblState.synchronize = type != 0;
+   grblState.requestEEUpdate = 3;
+   grblState.requestWSUpdate = 3;
+   grblState.requestGCUpdate = 3;
+   grblState.requestBDUpdate = 3;
+   
+   if(type & EEREQ)
+   {
+      grblState.requestEEUpdate = 1;
+   }
+   if(type & WSREQ)
+   {
+      grblState.requestWSUpdate = 1;
+   }
+   if(type & GCREQ)
+   {
+      grblState.requestGCUpdate = 1;
+   }
+   if(type & BDREQ)
+   {
+      grblState.requestBDUpdate = 1;
+   }
+}
+
+void SynchronizeWithGrbl()
+{
+   if(grblState.synchronize == true)
+   {
+      // Request current state and settings from Grbl.
+      if(grblState.requestEEUpdate == 1)
+      {
+         SendToGrbl(GRBL_VIEWSETTINGS);
+         grblState.requestEEUpdate = 2;
+      }
+      else if(grblState.requestEEUpdate == 3 && grblState.requestWSUpdate == 1)
+      {
+         // Call parameters first...
+         SendToGrbl(GRBL_PARAMETERS);
+         grblState.requestWSUpdate = 2;
+      }
+      else if(grblState.requestWSUpdate == 3 && grblState.requestGCUpdate == 1)
+      {
+         // ... then get the parser
+         SendToGrbl(GRBL_GCODEPARSER);
+         grblState.requestGCUpdate = 2;
+      }
+      else if(grblState.requestGCUpdate == 3 && grblState.requestBDUpdate == 1)
+      {
+         // Get the buffer sizes.
+         SendToGrbl(GRBL_BUILDINFO);
+         grblState.requestBDUpdate = 2;
+      }
+      else if(grblState.requestBDUpdate == 3 && grblState.requestEEUpdate == 3 &&
+              grblState.requestGCUpdate == 3 && grblState.requestWSUpdate == 3)
+      {
+         // Request a status report.
+         userial.write(GRBL_STATUSREPORT);
+
+         grblState.synchronize = false;
+         grblState.requestEEUpdate = 0;
+         grblState.requestWSUpdate = 0;
+         grblState.requestGCUpdate = 0;
+         grblState.requestBDUpdate = 0;
+      }
+   }
 }
 
 void loop()
 {
+   SynchronizeWithGrbl();
+
    if(displayRefresh >= 500)
    {
        displayRefresh -= 500;
@@ -920,7 +1988,8 @@ void loop()
    myusb.Task();
    MonitorUSBDevices();
  
-   Enc.Update(&userial);
+   BM.Update();
+   ProcessEncoderRotation(Enc.Update());
 
    // Request an update of the status in GRBL
   if(grblStatusTimer >= GRBL_STATUS_TIMEOUT)
@@ -928,11 +1997,10 @@ void loop()
      grblStatusTimer -= GRBL_STATUS_TIMEOUT;
      // Get a status update
      userial.write('?');
-     //SendToGrbl(grblTestStatus);
   }
 
   // Pass the serial data from computer to Grbl via userial.
-  if(Serial.available())
+  while(Serial.available())
   {
       char c(Serial.read());
       // Forward from computer to GRBL
@@ -968,7 +2036,7 @@ void loop()
   // forward them to the computer,
   // then parse them here to
   // display the state on the pendant.
-  if(userial.available())
+  while(userial.available())
   {
       char c(ReadUSBSerial());
       if(c == '\n')
@@ -994,11 +2062,12 @@ void loop()
   if(digitalReadFast(ENC_SW) == LOW && testPat == false)
   {
      testPat = true;
-     if(*sel1Pos == 255 && *sel2Pos == 255)
+     if(sel1Pos->k == 255 && sel2Pos->k == 255)
      {
         DrawTestPattern();
      }
-     else if(grblState == eJog && *sel2Pos != JOG)
+     else if(grblState.state == eJog &&
+             (sel1Pos->k == AXIS_X || sel1Pos->k == AXIS_Y || sel1Pos->k == AXIS_Z))
      {
         // Stop the jog command imediately.
         userial.write(0x85);
@@ -1008,28 +2077,23 @@ void loop()
   else if(digitalReadFast(ENC_SW) == HIGH && testPat == true)
   {
      testPat = false;
-     if(*sel1Pos == 255 && *sel2Pos == 255)
+     if(sel1Pos->k == 255 && sel2Pos->k == 255)
      {
-        Blank();
-        UpdateCommandTerminal();
-        UpdateGrblTerminal();
-        UpdateStatusDisplay();
+        RefreshScreen();
      }
-     else if(*sel1Pos == HOME && (grblState == eIdle || grblState == eAlarm))
+     else if(sel1Pos->k == SPINDLE)
      {
-        SendToGrbl("$H");
+        char s[20] = { '\0' };
+        sprintf(s, "S%ld", grblState.cmdSpindleSpeed);
+        SendToGrbl(s);
+        RequestGrblStateUpdate(GCREQ);
      }
-     else if(*sel1Pos == RESET)
+     else if(sel1Pos->k == FEEDRATE)
      {
-        userial.write(0x18);
-     }
-     else if(*sel1Pos == LOCKOUT)
-     {
-        SendToGrbl("$$");
-     }
-     else if(*sel1Pos == UNLOCK && (grblState == eIdle || grblState == eAlarm))
-     {
-        SendToGrbl("$X");
+        char s[20] = { '\0' };
+        sprintf(s, "F%ld", grblState.cmdFeedRate);
+        SendToGrbl(s);
+        RequestGrblStateUpdate(GCREQ);
      }
   }
 }

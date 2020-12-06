@@ -2,34 +2,123 @@
 #define _CONFIG
 
 // Selector Switches
-#define HOME   31        // SW1.1
+typedef struct
+{
+   uint8_t k;
+   const char *val;
+} uintCharStruct;
+
+#define SYSTEM   31        // SW1.1
 #define AXIS_X 30        // SW1.2
 #define AXIS_Y 29        // SW1.3
 #define AXIS_Z  28       // SW1.4
-#define LOCKOUT  27      // SW1.5
-#define UNLOCK    26     // SW1.6
-#define RESET       25   // SW1.7
+#define SPINDLE  27      // SW1.5
+#define FEEDRATE  26     // SW1.6
+#define LCDBRT    25   // SW1.7
 
 #define JOG      34      // SW2.1
 #define XP1     35       // SW2.2
 #define X1      36       // SW2.3
 #define X10  37          // SW2.4
 #define X100          38 // SW2.5
-#define SET_AXIS_ZERO 39 // SW2.6
-#define MACRO1 40        // SW2.7
-#define MACRO2 41        // SW2.8
-//#define MACRO3 16
-//#define CYCLE_START 18
-extern volatile uint8_t *sel1Pos;
-extern volatile uint8_t *sel2Pos;
+#define NA1           39 // SW2.6
+#define NA2           40 // SW2.7
+#define NA3  41          // SW2.8
 
 // GRBL
-enum grblStatesT { eUnkownState, eConnected, eIdle, eRun, eHold, eJog, eAlarm, eDoor, eCheck, eHome, eSleep };
-extern grblStatesT grblState;
+enum grblStatesT { eUnknownState, eConnected, eIdle, eRun, eHold, eJog, eAlarm, eDoor, eCheck, eHome, eSleep };
+
+enum grblMotionModeT { emUnkown, emG0, emG1, emG2, emG3, emG38_2, emG38_3, emG38_4, emG38_5, emG80 };
+enum grblCoordSpaceT { ecG54, ecG55, ecG56, ecG57, ecG58, ecG59, ecRange, ecUnkown };
+enum grblPlaneSelectT { epUnknown, epG17, epG18, epG19 };
+enum grblDistanceModeT { edUnfIkown, edG90, edG91 };
+enum grblFeedRateModeT { efUnknown, efG93, efG94 };
+enum grblUnitsModeT { euUnknown, euG20, euG21 };
+enum grblTLOModeT { etUnknown, etG3_1, et49 };
+enum grblProgramModeT { eMUnkown, eM0, eM1, eM2, eM30 };
+enum grblSpindleStateT { esUnknown, esM3, esM4, esM5 };
+enum grblCoolantStateT { eCUnknown, eCM7, eCM8, eCM9 };
+
+typedef struct
+{
+   char id[4] = { '\0' };
+   float val3[3] = { 0.f, 0.f, 0.f };
+} idP3t;
+
+typedef struct
+{
+   grblStatesT state = eUnknownState;
+
+   // Machine position
+   float MPOS[3] = { 0.f, 0.f, 0.f };
+   // Active work coordinate offset
+   float WCO[3] = { 0.f, 0.f, 0.f };
+   // Buffer
+   uint8_t plannerBlocksAvailable = 0;
+   uint8_t rxBufferBytesAvailable = 0;
+   //spindle
+   float currentSpindleSpeed = 0.f;
+   int32_t cmdSpindleSpeed = 0;
+   float programmedSpindleSpeed = 0.f;
+
+   // Feed Rate
+   float currentFeedRate = 0.f;
+   float programmedFeedRate = 0.f;
+   int32_t cmdFeedRate = 0.f;
+
+   // Overrides
+   uint8_t feedOverride = 0;
+   uint8_t rapidOverride = 0;
+   uint8_t spindleOverride = 0;
+
+   // EEPROM ($$)
+   float axisMaxRate[3] = { 1000.f, 1000.f, 500.f };
+   float axisMaxAccel[3] = { 50.f, 50.f, 50.f };
+   float axisMaxTravel[3] = { 500.f, 500.f, 100.f };
+   bool laserMode = false;
+   float maxSpindleSpeed = 0.f;
+
+   // Gcode parameters ($#)
+   idP3t workSpace[ecRange];
+   idP3t park28;
+   idP3t park30;
+   idP3t offset92;
+   idP3t probe;
+   float TLO = 0.f;
+   idP3t *activeWorkspace = nullptr;
+
+   // Jogging ($J=)
+   bool jogging = false;
+
+   // Gcode parser state ($G)
+   grblMotionModeT motionMode;
+   grblFeedRateModeT feedRateMode;
+   grblUnitsModeT unitsMode;
+   grblDistanceModeT distanceMode;
+   grblPlaneSelectT planeMode;
+   grblTLOModeT toolLengthMode;
+   grblCoordSpaceT activeWorkspaceMode;
+   grblProgramModeT programMode;
+   grblCoolantStateT coolantMode;
+   grblSpindleStateT spindleState;
+
+   // Build information ($I)
+   uint8_t plannerBlockCount = 0;
+   uint8_t rxBufferSize = 0;
+
+   bool synchronize = true;
+   uint8_t requestEEUpdate = 1;
+   uint8_t requestWSUpdate = 1;
+   uint8_t requestGCUpdate = 1;
+   uint8_t requestBDUpdate = 1;
+
+} grblStateStruct;
+
+extern grblStateStruct grblState;
 
 // Commands
 #define GRBL_HELP "$"
-#define GRBL_VIEWSETTIMGS "$$"
+#define GRBL_VIEWSETTINGS "$$"
 #define GRBL_PARAMETERS "$#"
 #define GRBL_GCODEPARSER "$G"
 #define GRBL_BUILDINFO "$I"
@@ -39,6 +128,20 @@ extern grblStatesT grblState;
 #define GRBL_HOMING "$H"
 #define GRBL_JOG "$J="
 #define GRBL_SLEEP "$SLP"
+#define GRBL_SET_X_ZERO "G10P0L20X0"
+#define GRBL_SET_Y_ZERO "G10P0L20Y0"
+#define GRBL_SET_Z_ZERO "G10P0L20Z0"
+#define GRBL_PROBE_X "G91\nG38.2X-10F25\nG90"
+#define GRBL_PROBE_Y "G91\nG38.2Y-10F25\nG90"
+#define GRBL_PROBE_Z "G91\nG38.2Z-10F25\nG90"
+#define GRBL_JOG_TO_X0 "$J=G90F6000X0"
+#define GRBL_JOG_TO_Y0 "$J=G90F6000Y0"
+#define GRBL_JOG_TO_Z0 "$J=G90F500Z0"
+#define GRBL_JOG_TO_X0Y0 "$J=G90F6000X0Y0"
+#define GRBL_LASER_MODE_ON "$32=1"
+#define GRBL_LASER_MODE_OFF "$32=0"
+#define GRBL_LASER_TESTMODE_ON "M3S1000"
+#define GRBL_LASER_TESTMODE_OFF "M5\nS0"
 
 // Realtime Commands
 #define GRBL_SOFTRESET 0x18
