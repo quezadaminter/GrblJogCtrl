@@ -21,9 +21,9 @@ typedef struct
 #define X1      36       // SW2.3
 #define X10  37          // SW2.4
 #define X100          38 // SW2.5
-#define NA1           39 // SW2.6
-#define NA2           40 // SW2.7
-#define NA3  41          // SW2.8
+#define F1           39 // SW2.6
+#define F2           40 // SW2.7
+#define DEBUG  41          // SW2.8
 
 // GRBL
 enum grblStatesT { eUnknownState, eConnected, eIdle, eRun, eHold, eJog, eAlarm, eDoor, eCheck, eHome, eSleep };

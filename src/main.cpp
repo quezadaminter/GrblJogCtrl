@@ -36,7 +36,6 @@ USBDriver *drivers[] = {&hub1, &hub2, &hid1, &hid2, &hid3, &userial};
 const char * driver_names[CNT_DEVICES] = {"Hub1", "Hub2",  "HID1", "HID2", "HID3", "USERIAL1" };
 bool driver_active[CNT_DEVICES] = {false, false, false, false};
 
-//volatile uint8_t selector1Pos[12] = { SYSTEM, AXIS_X, AXIS_Y, AXIS_Z, SPINDLE, FEEDRATE, LCDBRT, 255, 255, 255, 255, 255 };
 volatile uintCharStruct selector1Pos[12] =
 {
    { SYSTEM, "SYSTEM" }, { AXIS_X, "X AXIS" }, { AXIS_Y, "Y AXIS" }, { AXIS_Z, "Z AXIS" },
@@ -47,10 +46,9 @@ volatile uintCharStruct selector1Pos[12] =
 volatile uintCharStruct selector2Pos[12] =
 {
    { JOG, "JOG" }, { XP1, "0.1X" }, { X1, "1X" }, { X10, "10X" },
-   { X100, "100X" }, { 255, "\0" }, { 255, "\0" }, { 255, "\0" },
+   { X100, "100X" }, { F1, "F1" }, { F2, "F2" }, { DEBUG, "DEBUG" },
    { 255, "\0" }, {255, "\0" }, { 255, "\0" }, { 255, "\0" }
 };
-//volatile uint8_t selector2Pos[12] = { JOG, XP1, X1, X10, X100, 255, 255, 255, 255, 255, 255, 255 };
 volatile uintCharStruct emptySel = { 255, "NONE" };
 volatile uintCharStruct *sel1Pos = &emptySel;
 volatile uintCharStruct *sel2Pos = &emptySel;
@@ -74,7 +72,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
 #define BTN_CYCLE_START_RESUME    ButtonMatrix::eR4C2
 #define BTN_SHIFT                 ButtonMatrix::eR4C3
 
-// Default behavior
+// Default mode
 #define BTN_SetZ0     ButtonMatrix::eR1C1
 #define BTN_GotoZ0    ButtonMatrix::eR1C2
 #define BTN_LaserMode ButtonMatrix::eR1C3
@@ -88,7 +86,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
 #define BTN_M3M5    ButtonMatrix::eR3C3
 
 bool btnShiftPressed = false;
-// Default behavior + SHIFT
+// F1 mode
 #define BTN_ProbeZ     ButtonMatrix::eR1C1
 #define BTN_G56     ButtonMatrix::eR1C2
 #define BTN_G59 ButtonMatrix::eR1C3
@@ -139,7 +137,9 @@ DMAMEM RAFB tftFB[ILI9488_TFTWIDTH * ILI9488_TFTHEIGHT];
 ILI9488_t3 tft(ILI9488_t3(TFT_CS, TFT_DC, TFT_RST));
 elapsedMillis displayRefresh;
 elapsedMillis heartBeatTimeout;
+elapsedMillis laserTimeout;
 uint8_t lcdBrightness = 128;
+bool forceLCDRedraw = false;
 #define tROWS 40
 #define tCOLS 31
 #define cROWS 28
@@ -159,6 +159,7 @@ void Blank();
 // GRBL
 #define GRBL_STATUS_TIMEOUT 1000
 elapsedMillis grblStatusTimer;
+bool externalSenderConnected = false;
 char statusBuffer[300] = { '\0' };
 char serialBuf[tCOLS] = { '\0' };
 uint8_t serialBufPtr(0);
@@ -330,17 +331,20 @@ bool CompareStrings(const char *sz1, const char *sz2) {
 
 void AddLineToGrblTerminal(const char *line)
 {
-   // Wrap long lines.
-   uint8_t breaks((strlen(line) / (tCOLS - 1)) + 1);
+   if(sel2Pos != nullptr && sel2Pos->k == DEBUG)
+   {
+      // Wrap long lines.
+      uint8_t breaks((strlen(line) / (tCOLS - 1)) + 1);
 
-   for(uint8_t r = breaks; r < tROWS; ++r)
-   {
-      strncpy(terminal[r - breaks], terminal[r], tCOLS - 1);
-   }
+      for(uint8_t r = breaks; r < tROWS; ++r)
+      {
+         strncpy(terminal[r - breaks], terminal[r], tCOLS - 1);
+      }
    
-   for(uint8_t r = 0; r < breaks; ++r)
-   {
-      strncpy(terminal[(tROWS - breaks) + r], &line[r * (tCOLS - 1)], tCOLS);
+      for(uint8_t r = 0; r < breaks; ++r)
+      {
+         strncpy(terminal[(tROWS - breaks) + r], &line[r * (tCOLS - 1)], tCOLS);
+      }
    }
 }
 
@@ -368,6 +372,7 @@ void setup()
   tft.begin();
   tft.setRotation(1);
   tft.setFrameBuffer(tftFB);
+  tft.useFrameBuffer(true);
   memset(terminal, '\0', sizeof(terminal[0][0]) * tROWS * tCOLS);
   memset(cmdTerminal, '\0', sizeof(cmdTerminal[0][0]) * cROWS * tCOLS);
   //tft.fillScreen(ILI9488_BLACK);
@@ -401,6 +406,9 @@ void setup()
    pinMode(X1, INPUT_PULLUP);
    pinMode(X10, INPUT_PULLUP);
    pinMode(X100, INPUT_PULLUP);
+   pinMode(F1, INPUT_PULLUP);
+   pinMode(F2, INPUT_PULLUP);
+   pinMode(DEBUG, INPUT_PULLUP);
 
    attachInterrupt(digitalPinToInterrupt(SYSTEM), TestSelector1, CHANGE);
    attachInterrupt(digitalPinToInterrupt(AXIS_X), TestSelector1, CHANGE);
@@ -415,6 +423,9 @@ void setup()
    attachInterrupt(digitalPinToInterrupt(X1), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X10), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X100), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(F1), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(F2), TestSelector2, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(DEBUG), TestSelector2, CHANGE);
 
    for(uint8_t s = 0; s < 12; ++s)
    {
@@ -484,9 +495,18 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
             }
             else
             {
-               if(btnShiftPressed == false)
+               if(sel2Pos != nullptr && sel2Pos->k == F1)
                {
-                  // Default Mode
+                  // F1 mode
+                  switch(button)
+                  {
+                     default:
+                        break;
+                  }
+               }
+               else if(sel2Pos != nullptr && sel2Pos->k == F2)
+               {
+                  // F2 Mode
                   switch(button)
                   {
                      default:
@@ -495,7 +515,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                }
                else
                {
-                  // Default + Shift
+                  // Default mode
                   switch(button)
                   {
                      default:
@@ -566,7 +586,52 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
             }
             else
             {
-               if(btnShiftPressed == false)
+               if(sel2Pos != nullptr && sel2Pos->k == F1)
+               {
+                  // F1 Mode
+                  switch(button)
+                  {
+                     case(BTN_ProbeX):
+                        SendToGrbl(GRBL_PROBE_X);
+                        SendToGrbl(GRBL_SET_X_ZERO);
+                        break;
+                     case(BTN_ProbeY):
+                        SendToGrbl(GRBL_PROBE_Y);
+                        SendToGrbl(GRBL_SET_Y_ZERO);
+                        break;
+                     case(BTN_ProbeZ):
+                        SendToGrbl(GRBL_PROBE_Z);
+                        SendToGrbl(GRBL_SET_Z_ZERO);
+                        break;
+
+                     case(BTN_G54):
+                        SendToGrbl("G54");
+                        break;
+                     case(BTN_G55):
+                        SendToGrbl("G55");
+                        break;
+                     case(BTN_G56):
+                        SendToGrbl("G56");
+                        break;
+                     case(BTN_G57):
+                        SendToGrbl("G57");
+                        break;
+                     case(BTN_G58):
+                        SendToGrbl("G58");
+                        break;
+                     case(BTN_G59):
+                        SendToGrbl("G59");
+                        break;
+
+                     default:
+                        break;
+                  }
+               }
+               else if(sel2Pos != nullptr && sel2Pos->k == F2)
+               {
+                  // F2 Mode
+               }
+               else
                {
                   // Default Mode
                   switch(button)
@@ -623,47 +688,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                         break;
                   }
                }
-               else
-               {
-                  // Default + Shift
-                  switch(button)
-                  {
-                     case(BTN_ProbeX):
-                        SendToGrbl(GRBL_PROBE_X);
-                        SendToGrbl(GRBL_SET_X_ZERO);
-                        break;
-                     case(BTN_ProbeY):
-                        SendToGrbl(GRBL_PROBE_Y);
-                        SendToGrbl(GRBL_SET_Y_ZERO);
-                        break;
-                     case(BTN_ProbeZ):
-                        SendToGrbl(GRBL_PROBE_Z);
-                        SendToGrbl(GRBL_SET_Z_ZERO);
-                        break;
-
-                     case(BTN_G54):
-                        SendToGrbl("G54");
-                        break;
-                     case(BTN_G55):
-                        SendToGrbl("G55");
-                        break;
-                     case(BTN_G56):
-                        SendToGrbl("G56");
-                        break;
-                     case(BTN_G57):
-                        SendToGrbl("G57");
-                        break;
-                     case(BTN_G58):
-                        SendToGrbl("G58");
-                        break;
-                     case(BTN_G59):
-                        SendToGrbl("G59");
-                        break;
-
-                     default:
-                        break;
-                  }
-               }
+               
                
             }
 
@@ -1083,6 +1108,10 @@ uint16_t ParseStatusMessage(char *msg)
       }
 
       UpdateStatusDisplay();
+      if(externalSenderConnected == true)
+      {
+         forceLCDRedraw = true;
+      }
    }
 
    return(p);
@@ -1408,7 +1437,7 @@ uint16_t ParseOther(char *msg)
          ++q;
       }
 
-      if(redraw == true)
+      if(redraw == true && sel2Pos != nullptr && sel2Pos->k == DEBUG)
       {
          UpdateGrblTerminal();
       }
@@ -1447,6 +1476,16 @@ void UpdateClockDisplay()
    {
       tft.fillCircle(46, 16, 8, ILI9488_BLACK);
    }
+   else if(grblState.currentSpindleSpeed != 0 && grblState.spindleState != esM5)
+   {
+      // Laser is running.
+      if(laserTimeout > 500)
+      {
+         laserTimeout -= 500;
+         tft.fillCircle(46, 16, 8, ILI9488_GREEN);
+      }
+   }
+   
 
    tft.fillRect(72, 20, 8, 8, btnShiftPressed ? ILI9488_WHITE : ILI9488_BLACK);
    tft.fillTriangle(66, 20, 76, 10, 86, 20, btnShiftPressed ? ILI9488_WHITE : ILI9488_BLACK);
@@ -1757,53 +1796,56 @@ void UpdateParameterDisplay()
 
 void UpdateGrblTerminal()
 {
-   tft.setTextSize(1);
-
-   int16_t x, y;
-   uint16_t cw, ch;
-   int8_t r = tROWS - 1;
-
-   tft.getTextBounds("0", 0, 0, &x, &y, &cw, &ch);
-   //tft.fillRect(0, 0, cw * tCOLS - 1, tft.height(), ILI9488_OLIVE);
-   tft.fillRect(0, 48, cw * tCOLS - 1, tft.height() - 48, ILI9488_BLACK);
-   tft.drawRect(0, 48, cw * tCOLS - 1, tft.height() - 48, ILI9488_OLIVE);
-
-   while(r >= 0)
+   if(sel2Pos != nullptr && sel2Pos->k == DEBUG)
    {
-      if(terminal[r] != NULL && r > 5)
+      tft.setTextSize(1);
+
+      int16_t x, y;
+      uint16_t cw, ch;
+      int8_t r = tROWS - 1;
+
+      tft.getTextBounds("0", 0, 0, &x, &y, &cw, &ch);
+      //tft.fillRect(0, 0, cw * tCOLS - 1, tft.height(), ILI9488_OLIVE);
+      tft.fillRect(0, 48, cw * tCOLS - 1, tft.height() - 48, ILI9488_BLACK);
+      tft.drawRect(0, 48, cw * tCOLS - 1, tft.height() - 48, ILI9488_OLIVE);
+
+      while(r >= 0)
       {
-         if(strcmp(terminal[r], "ok") == 0)
+         if(terminal[r] != NULL && r > 5)
          {
-            --grblLinesSent;
-            tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
-         }
-         else if(strstr(terminal[r], "error") != NULL)
-         {
-            tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
-            if(strlen(terminal[r]) > 6)
+            if(strcmp(terminal[r], "ok") == 0)
             {
-               uint8_t e(atoi(&terminal[r][6]));
-               const char *ec(grblErrorDesc[e]);
-               AddLineToCommandTerminal(ec);
+               --grblLinesSent;
+               tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
             }
-         }
-         else if(strstr(terminal[r], "ALARM") != NULL)
-         {
-            tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
-            if(strlen(terminal[r]) > 6)
+            else if(strstr(terminal[r], "error") != NULL)
             {
-               uint8_t e(atoi(&terminal[r][6]));
-               const char *ec(grblAlarmDesc[e]);
-               AddLineToCommandTerminal(ec);
+               tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
+               if(strlen(terminal[r]) > 6)
+               {
+                  uint8_t e(atoi(&terminal[r][6]));
+                  const char *ec(grblErrorDesc[e]);
+                  AddLineToCommandTerminal(ec);
+               }
             }
+            else if(strstr(terminal[r], "ALARM") != NULL)
+            {
+               tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
+               if(strlen(terminal[r]) > 6)
+               {
+                  uint8_t e(atoi(&terminal[r][6]));
+                  const char *ec(grblAlarmDesc[e]);
+                  AddLineToCommandTerminal(ec);
+               }
+            }
+            else
+            {
+               tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
+            }
+            Text(0,(r * ch) , terminal[r]);
          }
-         else
-         {
-            tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-         }
-         Text(0,(r * ch) , terminal[r]);
+         --r;
       }
-      --r;
    }
 }
 
@@ -1978,9 +2020,15 @@ void loop()
 {
    SynchronizeWithGrbl();
 
-   if(displayRefresh >= 500)
+   if(externalSenderConnected == false && displayRefresh >= 500)
    {
        displayRefresh -= 500;
+       UpdateClockDisplay();
+       tft.updateScreenAsync();
+   }
+   else if(forceLCDRedraw == true)
+   {
+      forceLCDRedraw = false;
        UpdateClockDisplay();
        tft.updateScreenAsync();
    }
@@ -1992,11 +2040,16 @@ void loop()
    ProcessEncoderRotation(Enc.Update());
 
    // Request an update of the status in GRBL
-  if(grblStatusTimer >= GRBL_STATUS_TIMEOUT)
+  if(externalSenderConnected == false && grblStatusTimer >= GRBL_STATUS_TIMEOUT)
   {
      grblStatusTimer -= GRBL_STATUS_TIMEOUT;
      // Get a status update
      userial.write('?');
+  }
+  else if(externalSenderConnected == true && grblStatusTimer >= (GRBL_STATUS_TIMEOUT * 5))
+  {
+     // Maybe disconnected?
+     externalSenderConnected = false;
   }
 
   // Pass the serial data from computer to Grbl via userial.
@@ -2009,25 +2062,35 @@ void loop()
       // This was not sent by us.
       if(c == '?')
       {
-         grblStatusTimer -= (GRBL_STATUS_TIMEOUT * 2);
+         externalSenderConnected = true;
+         grblStatusTimer = 0;
       }
-      // Process locally for display
-      else if(c == '\n')
+      else if(sel2Pos != nullptr && sel2Pos->k == DEBUG)
       {
-         AddLineToCommandTerminal(serialBuf);
-         serialBufPtr = 0;
-         memset(serialBuf, '\0', tCOLS);
-         UpdateCommandTerminal();
-      }
-      else
-      {
-         serialBuf[serialBufPtr] = c;
-         serialBufPtr++;
-         if(serialBufPtr >= tCOLS - 1)
+         // This consumes a fair amount of CPU time
+         // so ONLY use it to debug the communication
+         // between the sender and this controller.
+         // NEVER use it when running a real job,
+         // it can lock itself up if it can't keep up.
+
+         // Process locally for display
+         if(c == '\n')
          {
-            serialBufPtr = 0;
             AddLineToCommandTerminal(serialBuf);
+            serialBufPtr = 0;
             memset(serialBuf, '\0', tCOLS);
+            UpdateCommandTerminal();
+         }
+         else
+         {
+            serialBuf[serialBufPtr] = c;
+            serialBufPtr++;
+            if(serialBufPtr >= tCOLS - 1)
+            {
+               serialBufPtr = 0;
+               AddLineToCommandTerminal(serialBuf);
+               memset(serialBuf, '\0', tCOLS);
+            }
          }
       }
   }
@@ -2038,25 +2101,27 @@ void loop()
   // display the state on the pendant.
   while(userial.available())
   {
-      char c(ReadUSBSerial());
-      if(c == '\n')
-      {
-         UserialBuf[UserialBufPtr] = c;
-         ProcessLineFromGrbl();
-         UserialBufPtr = 0;
-         memset(UserialBuf, '\0', 512);
-      }
-      else if(c != '\r') // Grbl sends back both \n and \r at the end of a line. We ignore the \r to make things easier for us when splitting lines in this code.
-      {
-         UserialBuf[UserialBufPtr] = c;
-         UserialBufPtr++;
-         if(UserialBufPtr >= 510)
-         {
-            UserialBufPtr = 0;
-            ProcessLineFromGrbl();
-            memset(UserialBuf, '\0', 512);
-         }
-      }
+     char c(ReadUSBSerial());
+
+     if(c == '\n')
+     {
+        UserialBuf[UserialBufPtr] = c;
+        ProcessLineFromGrbl();
+        UserialBufPtr = 0;
+        memset(UserialBuf, '\0', 512);
+     }
+     else if(c != '\r') // Grbl sends back both \n and \r at the end of a line. We ignore the \r to make things easier for us when splitting lines in this code.
+     {
+        UserialBuf[UserialBufPtr] = c;
+        UserialBufPtr++;
+        if(UserialBufPtr >= 510)
+        {
+           AddLineToGrblTerminal(UserialBuf);
+           UserialBufPtr = 0;
+           ProcessLineFromGrbl();
+           memset(UserialBuf, '\0', 512);
+        }
+     }
   }
 
   if(digitalReadFast(ENC_SW) == LOW && testPat == false)
