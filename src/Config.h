@@ -1,6 +1,9 @@
 #ifndef _CONFIG
 #define _CONFIG
 
+#include <stdint.h>
+#include "ILI9488_t3.h"
+
 // Selector Switches
 typedef struct
 {
@@ -8,6 +11,7 @@ typedef struct
    const char *val;
 } uintCharStruct;
 
+#define SEL_NONE 255 // Both SW1 and SW2
 #define SYSTEM   31        // SW1.1
 #define AXIS_X 30        // SW1.2
 #define AXIS_Y 29        // SW1.3
@@ -15,6 +19,7 @@ typedef struct
 #define SPINDLE  27      // SW1.5
 #define FEEDRATE  26     // SW1.6
 #define LCDBRT    25   // SW1.7
+#define FILES     24   // SW1.8
 
 #define JOG      34      // SW2.1
 #define XP1     35       // SW2.2
@@ -24,6 +29,15 @@ typedef struct
 #define F1           39 // SW2.6
 #define F2           40 // SW2.7
 #define DEBUG  41          // SW2.8
+
+// Display
+#define tROWS 33 //40
+#define tCOLS 31
+#define cROWS 28
+extern ILI9488_t3 tft;
+extern void RefreshScreen();
+extern void Text(uint16_t x, uint16_t y, const char *text);
+extern void Text(uint16_t x, uint16_t y, const char *text, size_t len);
 
 // GRBL
 enum grblStatesT { eUnknownState, eConnected, eIdle, eRun, eHold, eJog, eAlarm, eDoor, eCheck, eHome, eSleep };
@@ -116,6 +130,8 @@ typedef struct
 
 extern grblStateStruct grblState;
 
+#define GRBL_RX_BUFFER_SIZE 128
+
 // Commands
 #define GRBL_HELP "$"
 #define GRBL_VIEWSETTINGS "$$"
@@ -169,7 +185,7 @@ extern grblStateStruct grblState;
 
 // Configuration Registers
 //$0=10 	Step pulse, microseconds
-//$1=25 	Step idle delay, milliseconds
+//$1=255	Step idle delay, milliseconds
 //$2=0 	Step port invert, mask
 //$3=0 	Direction port invert, mask
 //$4=0 	Step enable invert, boolean

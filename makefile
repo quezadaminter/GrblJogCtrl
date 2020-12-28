@@ -21,7 +21,7 @@ LIBS_SHARED_BASE := C:\Users\mquezada\Documents\Arduino\libraries
 LIBS_SHARED      := ILI9488_t3 Adafruit_GFX_Library Adafruit_BusIO
 
 LIBS_LOCAL_BASE   := C:\PROGRA~2\Arduino\hardware\teensy\avr\libraries
-LIBS_LOCAL       := SPI USBHost_t36 Wire
+LIBS_LOCAL       := SPI USBHost_t36 Wire SD
 
 CORE_BASE        := C:\PROGRA~2\Arduino\hardware\teensy\avr\cores\teensy4
 GCC_BASE         := C:\PROGRA~2\Arduino\hardware\tools\arm\bin

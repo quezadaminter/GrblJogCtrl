@@ -18,6 +18,7 @@
 #include "Config.h"
 #include "Encoder.h"
 #include "ButtonMatrix.h"
+#include "GcodeStreaming.h"
 #include "ILI9488_t3.h"
 #include "USBHost_t36.h"
 #define USBBAUD 115200
@@ -39,22 +40,22 @@ bool driver_active[CNT_DEVICES] = {false, false, false, false};
 volatile uintCharStruct selector1Pos[12] =
 {
    { SYSTEM, "SYSTEM" }, { AXIS_X, "X AXIS" }, { AXIS_Y, "Y AXIS" }, { AXIS_Z, "Z AXIS" },
-   { SPINDLE, "SPINDLE" }, { FEEDRATE, "FEEDRATE" }, { LCDBRT, "LCD BRT" }, { 255, "\0" },
-   {255, "\0" }, { 255, "\0" }, { 255, "\0" }, { 255, "\0" }
+   { SPINDLE, "SPINDLE" }, { FEEDRATE, "FEEDRATE" }, { LCDBRT, "LCD BRT" }, { FILES, "FILES" },
+   {SEL_NONE, "\0" }, { SEL_NONE, "\0" }, { SEL_NONE, "\0" }, { SEL_NONE, "\0" }
 };
 
 volatile uintCharStruct selector2Pos[12] =
 {
    { JOG, "JOG" }, { XP1, "0.1X" }, { X1, "1X" }, { X10, "10X" },
    { X100, "100X" }, { F1, "F1" }, { F2, "F2" }, { DEBUG, "DEBUG" },
-   { 255, "\0" }, {255, "\0" }, { 255, "\0" }, { 255, "\0" }
+   { SEL_NONE, "\0" }, {SEL_NONE, "\0" }, { SEL_NONE, "\0" }, { SEL_NONE, "\0" }
 };
-volatile uintCharStruct emptySel = { 255, "NONE" };
+volatile uintCharStruct emptySel = { SEL_NONE, "NONE" };
 volatile uintCharStruct *sel1Pos = &emptySel;
 volatile uintCharStruct *sel2Pos = &emptySel;
 volatile bool updateSelectorStates = false;
 
-bool testPat = false;
+bool pastEncoderSwitchPos = false;
 uint8_t multiplierSet = 1;
 bool jogMode = false;
 void TestSelector1();
@@ -134,15 +135,12 @@ uint16_t AXES_ACCEL [3] = { 500, 500, 50 }; // mm/s/s <-- Need to fill these fro
 #define TFT_MOSI 11
 #define TFT_SCLK 13
 DMAMEM RAFB tftFB[ILI9488_TFTWIDTH * ILI9488_TFTHEIGHT];
-ILI9488_t3 tft(ILI9488_t3(TFT_CS, TFT_DC, TFT_RST));
+ILI9488_t3 tft(TFT_CS, TFT_DC, TFT_RST);
 elapsedMillis displayRefresh;
 elapsedMillis heartBeatTimeout;
 elapsedMillis laserTimeout;
 uint8_t lcdBrightness = 128;
 bool forceLCDRedraw = false;
-#define tROWS 40
-#define tCOLS 31
-#define cROWS 28
 char terminal[tROWS][tCOLS];
 char cmdTerminal[cROWS][tCOLS];
 
@@ -157,9 +155,10 @@ void UpdateLCDBrightnessIndication(bool clear = false);
 void Blank();
 
 // GRBL
+enum gCodeSenderType { eNoSender, eSelfSender, eExternalSender };
 #define GRBL_STATUS_TIMEOUT 1000
 elapsedMillis grblStatusTimer;
-bool externalSenderConnected = false;
+gCodeSenderType gCodeSender = eNoSender;
 char statusBuffer[300] = { '\0' };
 char serialBuf[tCOLS] = { '\0' };
 uint8_t serialBufPtr(0);
@@ -169,6 +168,16 @@ void SendToGrbl(const char *msg);
 // For realtime / single byte commands
 void SendToGrbl(uint8_t b);
 char grblJogCommand[128] = { '\0' };
+int8_t axisProbeDirectionX = 0;
+int8_t axisProbeDirectionY = 0;
+int8_t axisProbeDirectionZ = 0;
+
+#define CONTROLLER_NORMAL 0
+#define CONTROLLER_PROBEX 1
+#define CONTROLLER_PROBEY 2
+#define CONTROLLER_PROBEZ 3
+
+uint8_t controllerState = CONTROLLER_NORMAL;
 
 // Request bitmasks
 #define EEREQ (1 << 0)
@@ -218,7 +227,6 @@ enum grblPushMsgT { eMSG, eGC, eHLP, eVER, eEcho, eOther, eG54, eG55, eG56, eG57
                     eG28, eG30, eG92, eTLO, ePRB, ePushRange };
 
 
-uint8_t grblLinesSent = 0;
 
 #define SFIELDS 20
 grblStateStruct grblState;
@@ -364,6 +372,8 @@ void AddLineToCommandTerminal(const char *line)
    }
 }
 
+
+
 void setup()
 {
   // Display
@@ -400,6 +410,7 @@ void setup()
    pinMode(SPINDLE, INPUT_PULLUP);
    pinMode(FEEDRATE, INPUT_PULLUP);
    pinMode(LCDBRT, INPUT_PULLUP);
+   pinMode(FILES, INPUT_PULLUP);
 
    pinMode(JOG, INPUT_PULLUP);
    pinMode(XP1, INPUT_PULLUP);
@@ -417,6 +428,7 @@ void setup()
    attachInterrupt(digitalPinToInterrupt(SPINDLE), TestSelector1, CHANGE);
    attachInterrupt(digitalPinToInterrupt(FEEDRATE), TestSelector1, CHANGE);
    attachInterrupt(digitalPinToInterrupt(LCDBRT), TestSelector1, CHANGE);
+   attachInterrupt(digitalPinToInterrupt(FILES), TestSelector1, CHANGE);
 
    attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2, CHANGE);
@@ -429,12 +441,12 @@ void setup()
 
    for(uint8_t s = 0; s < 12; ++s)
    {
-      if(selector1Pos[s].k != 255 && digitalReadFast(selector1Pos[s].k) == LOW)
+      if(selector1Pos[s].k != SEL_NONE && digitalReadFast(selector1Pos[s].k) == LOW)
       {
          sel1Pos = &selector1Pos[s];
          Serial.print("sel1 pos:");Serial.println(sel1Pos->val);
       }
-      if(selector2Pos[s].k != 255 && digitalReadFast(selector2Pos[s].k) == LOW)
+      if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW)
       {
          sel2Pos = &selector2Pos[s];
          Serial.print("sel2 pos:");Serial.println(sel2Pos->val);
@@ -592,16 +604,19 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                   switch(button)
                   {
                      case(BTN_ProbeX):
-                        SendToGrbl(GRBL_PROBE_X);
-                        SendToGrbl(GRBL_SET_X_ZERO);
+                        controllerState = CONTROLLER_PROBEX;
+                        //SendToGrbl(GRBL_PROBE_X);
+                        //SendToGrbl(GRBL_SET_X_ZERO);
                         break;
                      case(BTN_ProbeY):
-                        SendToGrbl(GRBL_PROBE_Y);
-                        SendToGrbl(GRBL_SET_Y_ZERO);
+                        controllerState = CONTROLLER_PROBEY;
+                        //SendToGrbl(GRBL_PROBE_Y);
+                        //SendToGrbl(GRBL_SET_Y_ZERO);
                         break;
                      case(BTN_ProbeZ):
-                        SendToGrbl(GRBL_PROBE_Z);
-                        SendToGrbl(GRBL_SET_Z_ZERO);
+                        controllerState = CONTROLLER_PROBEZ;
+                        //SendToGrbl(GRBL_PROBE_Z);
+                        //SendToGrbl(GRBL_SET_Z_ZERO);
                         break;
 
                      case(BTN_G54):
@@ -704,16 +719,24 @@ void EncoderInterrupt()
 
 void TestSelector1()
 {
+   uint8_t pastPos = sel1Pos != nullptr ? sel1Pos->k : SEL_NONE;
    sel1Pos = &emptySel;
    for(uint8_t s = 0; s < 12; ++s)
    {
-      if(selector1Pos[s].k != 255 && digitalReadFast(selector1Pos[s].k) == LOW)
+      if(selector1Pos[s].k != SEL_NONE && digitalReadFast(selector1Pos[s].k) == LOW)
       {
          sel1Pos = &selector1Pos[s];
          break;
       }
    }
    updateSelectorStates = true;
+
+   // Keep these handlers short and sweet since they are
+   // happenning inside an interrupt.
+   if(pastPos == FILES || sel1Pos->k == FILES)
+   {
+      GC.HandleSelectorStateChange(sel1Pos->k, pastPos);
+   }
 }
 
 void TestSelector2()
@@ -721,7 +744,7 @@ void TestSelector2()
    sel2Pos = &emptySel;
    for(uint8_t s = 0; s < 12; ++s)
    {
-      if(selector2Pos[s].k != 255 && digitalReadFast(selector2Pos[s].k) == LOW)
+      if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW)
       {
          sel2Pos = &selector2Pos[s];
          break;
@@ -908,6 +931,11 @@ void ProcessEncoderRotation(int8_t steps)
       analogWrite(TFT_BL, lcdBrightness);
 
       UpdateLCDBrightnessIndication();
+      tft.updateScreenAsync();
+   }
+   else if(sel1Pos->k == FILES && steps != 0)
+   {
+      GC.Select(steps);
       tft.updateScreenAsync();
    }
 }
@@ -1108,7 +1136,7 @@ uint16_t ParseStatusMessage(char *msg)
       }
 
       UpdateStatusDisplay();
-      if(externalSenderConnected == true)
+      if(gCodeSender == eExternalSender)
       {
          forceLCDRedraw = true;
       }
@@ -1455,11 +1483,13 @@ void RefreshScreen()
    UpdateSelectorStates();
    UpdateParameterDisplay();
 
-   if(sel1Pos != nullptr && sel1Pos->k == LCDBRT)
+   if(sel1Pos != nullptr)
    {
-      UpdateLCDBrightnessIndication();
+      if(sel1Pos->k == LCDBRT)
+      {
+         UpdateLCDBrightnessIndication();
+      }
    }
-
 }
 
 void UpdateClockDisplay()
@@ -1524,6 +1554,19 @@ void Text(uint16_t x, uint16_t y, const char *text)
 {
    tft.setCursor(x, y);
    tft.print(text);
+}
+
+void Text(uint16_t x, uint16_t y, const char *text, size_t len)
+{
+   tft.setCursor(x, y);
+   for(size_t x = 0; x <= len; ++x)
+   {
+      if(text[x] == '\0')
+      {
+         break;
+      }
+      tft.print(text[x]);
+   }
 }
 
 void Blank()
@@ -1815,7 +1858,6 @@ void UpdateGrblTerminal()
          {
             if(strcmp(terminal[r], "ok") == 0)
             {
-               --grblLinesSent;
                tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
             }
             else if(strstr(terminal[r], "error") != NULL)
@@ -1853,7 +1895,7 @@ void UpdateCommandTerminal()
 {
    tft.setTextSize(1);
 
-   int16_t x(300), y(192);
+   int16_t x(00), y(192);
    uint16_t cw, ch;
    uint8_t rmax((tft.height() - y) / 8);
    uint8_t rend(cROWS - rmax);
@@ -1879,7 +1921,7 @@ void ProcessLineFromGrbl()
 {
    if(strncasecmp(UserialBuf, "ok", 2) == 0)
    {
-      --grblLinesSent;
+      GC.Acknowledge();
       ParseOther(UserialBuf);
    }
    else if(UserialBuf[0] == '<')
@@ -1925,7 +1967,6 @@ void SendToGrbl(const char *msg)
    // send a single \n byte separately.
    userial.print(msg);
    userial.print('\n');
-   ++grblLinesSent;
 
    if(strstr(msg, "G54") != NULL ||
       strstr(msg, "G55") != NULL ||
@@ -2020,7 +2061,7 @@ void loop()
 {
    SynchronizeWithGrbl();
 
-   if(externalSenderConnected == false && displayRefresh >= 500)
+   if(gCodeSender == eNoSender && displayRefresh >= 500)
    {
        displayRefresh -= 500;
        UpdateClockDisplay();
@@ -2039,33 +2080,55 @@ void loop()
    BM.Update();
    ProcessEncoderRotation(Enc.Update());
 
+   GC.Update();
+
    // Request an update of the status in GRBL
-  if(externalSenderConnected == false && grblStatusTimer >= GRBL_STATUS_TIMEOUT)
+  if(gCodeSender == eNoSender && grblStatusTimer >= GRBL_STATUS_TIMEOUT)
   {
      grblStatusTimer -= GRBL_STATUS_TIMEOUT;
      // Get a status update
      userial.write('?');
   }
-  else if(externalSenderConnected == true && grblStatusTimer >= (GRBL_STATUS_TIMEOUT * 5))
+  else if(gCodeSender == eExternalSender && grblStatusTimer >= (GRBL_STATUS_TIMEOUT * 5))
   {
      // Maybe disconnected?
-     externalSenderConnected = false;
+     gCodeSender = eNoSender;
   }
 
-  // Pass the serial data from computer to Grbl via userial.
-  while(Serial.available())
-  {
-      char c(Serial.read());
+  // Pass the serial data to GRBL. Check if it is comming
+   // from the external sender or the local file system.
+   //while(Serial.available())
+   while (true)
+   {
+      char c('\0');
+      if(gCodeSender == eSelfSender)
+      {
+         if(GC.ReadFile(c) == false)
+         {
+            break;
+         }
+      }
+      else
+      {
+         if(Serial.available())
+         {
+            c = Serial.read();
+         }
+         else
+         {
+            break;
+         }
+      }
       // Forward from computer to GRBL
       userial.write(c);
-      
+
       // This was not sent by us.
-      if(c == '?')
+      if (c == '?')
       {
-         externalSenderConnected = true;
+         gCodeSender = eExternalSender;
          grblStatusTimer = 0;
       }
-      else if(sel2Pos != nullptr && sel2Pos->k == DEBUG)
+      else if (sel2Pos != nullptr && sel2Pos->k == DEBUG)
       {
          // This consumes a fair amount of CPU time
          // so ONLY use it to debug the communication
@@ -2074,7 +2137,7 @@ void loop()
          // it can lock itself up if it can't keep up.
 
          // Process locally for display
-         if(c == '\n')
+         if (c == '\n')
          {
             AddLineToCommandTerminal(serialBuf);
             serialBufPtr = 0;
@@ -2085,7 +2148,7 @@ void loop()
          {
             serialBuf[serialBufPtr] = c;
             serialBufPtr++;
-            if(serialBufPtr >= tCOLS - 1)
+            if (serialBufPtr >= tCOLS - 1)
             {
                serialBufPtr = 0;
                AddLineToCommandTerminal(serialBuf);
@@ -2093,8 +2156,8 @@ void loop()
             }
          }
       }
-  }
-  
+   }
+
   // Grab the messages from GRBL,
   // forward them to the computer,
   // then parse them here to
@@ -2124,10 +2187,11 @@ void loop()
      }
   }
 
-  if(digitalReadFast(ENC_SW) == LOW && testPat == false)
+  if(digitalReadFast(ENC_SW) == LOW && pastEncoderSwitchPos == false)
   {
-     testPat = true;
-     if(sel1Pos->k == 255 && sel2Pos->k == 255)
+     // Press
+     pastEncoderSwitchPos = true;
+     if(sel1Pos->k == SEL_NONE && sel2Pos->k == SEL_NONE)
      {
         DrawTestPattern();
      }
@@ -2138,11 +2202,16 @@ void loop()
         userial.write(0x85);
         SendToGrbl("G4P0");
      }
+     else if(sel1Pos->k == FILES)
+     {
+        GC.Select(true);
+     }
   }
-  else if(digitalReadFast(ENC_SW) == HIGH && testPat == true)
+  else if(digitalReadFast(ENC_SW) == HIGH && pastEncoderSwitchPos == true)
   {
-     testPat = false;
-     if(sel1Pos->k == 255 && sel2Pos->k == 255)
+     // Release
+     pastEncoderSwitchPos = false;
+     if(sel1Pos->k == SEL_NONE && sel2Pos->k == SEL_NONE)
      {
         RefreshScreen();
      }
@@ -2160,5 +2229,9 @@ void loop()
         SendToGrbl(s);
         RequestGrblStateUpdate(GCREQ);
      }
-  }
+     else if(sel1Pos->k == FILES)
+     {
+        GC.Select(false);
+     }
+   }
 }

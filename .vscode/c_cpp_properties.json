@@ -11,7 +11,8 @@
         "C:/Program Files (x86)/Arduino/hardware/teensy/avr/libraries/SPI/**",
         "C:/Program Files (x86)/Arduino/hardware/teensy/avr/libraries/Wire/**",
         "C:/Program Files (x86)/Arduino/hardware/teensy/avr/libraries/Wire/utility/**",
-        "C:/Program Files (x86)/Arduino/hardware/teensy/avr/libraries/USBHost_t36/**"
+        "C:/Program Files (x86)/Arduino/hardware/teensy/avr/libraries/USBHost_t36/**",
+        "C:/Program Files (x86)/Arduino/hardware/teensy/avr/libraries/SD/**"
       ],
       "forcedInclude": [],
       "defines": [
