@@ -24,6 +24,12 @@
 
 Streamer GC;
 
+Streamer::Streamer()
+{
+   onOkCancelChoiceMadeConnect = std::bind(&Streamer::onOkCancelChoiceMade, *this, std::placeholders::_1);
+   onMessageChoiceConnect  = std::bind(&Streamer::onMessageChoiceMade, *this, std::placeholders::_1);
+}
+
 bool Streamer::begin()
 {
    ClearFilesTerminal();
@@ -60,29 +66,29 @@ void Streamer::ListFiles(File &dir)
             {
                selectedFile = fileCount - 1; // To match the invertd list order of the display.
             }
-            Serial.print("Found ");Serial.print(fileCount);Serial.println(" files.");
+            //Serial.print("Found ");Serial.print(fileCount);Serial.println(" files.");
             break;
          }
          else
          {
-            Serial.print(f.name()); Serial.print("  ");
+            //Serial.print(f.name()); Serial.print("  ");
             if(f.isDirectory() == false)
             {
                // Figure out how to get file's dates.
                //uint16_t fdate = 0, ftime = 0;
                //f.getCreateDateTime(&fdate, &ftime);
-               Serial.print(f.size()); //Serial.print(" "); Serial.print(fdate); Serial.print(" ");Serial.print(ftime);
+               //Serial.print(f.size()); //Serial.print(" "); Serial.print(fdate); Serial.print(" ");Serial.print(ftime);
                fileCount++;
                AddLineToFilesTerminal(f.name());
             }
             else
             {
-               Serial.print("/");
+               //Serial.print("/");
                // Add recursion here if needed.
                // For now, show only one directory at a time.
                //ListFiles(f);
             }
-            Serial.println();
+            //Serial.println();
             f.close();
          }
       }
@@ -172,9 +178,31 @@ bool Streamer::ReadFile(char &c)
    return(ret);
 }
 
-void Streamer::onOkCancelChoiceMade(OkCancelDialog::DialogStatesT state)
+void Streamer::Acknowledge()
 {
+   // Remove last acknowledged line length;
+   charactersSent -= grblQ.pop();
+}
+
+void Streamer::onMessageChoiceMade(uint8_t s)
+{
+   MessageDialog::DialogStatesT state(static_cast<MessageDialog::DialogStatesT>(s));
    RefreshScreen();
+   if(state == MessageDialog::eOk)
+   {
+      // Close dialog
+      dialog->Close();
+      delete dialog;
+      dialog = nullptr;
+   }
+}
+
+void Streamer::onOkCancelChoiceMade(uint8_t s)
+{
+   OkCancelDialog::DialogStatesT state(static_cast<OkCancelDialog::DialogStatesT>(s));
+   Serial.print("State1: ");Serial.println(s);
+   Serial.print("State2: ");Serial.println(streamerState);
+   Serial.flush();
    if(state == OkCancelDialog::eOk)
    {
       if(streamerState == CONFIRM)
@@ -183,8 +211,16 @@ void Streamer::onOkCancelChoiceMade(OkCancelDialog::DialogStatesT state)
       }
       else if(streamerState == ARM_FILE)
       {
-         // Let's go!
-         streamerState = STREAM;
+         uint8_t nameIndex((tROWS - 1) - selectedFile);
+         if(OpenFile(filesTerminal[nameIndex]) == true)
+         {
+            // Let's go!
+            streamerState = STREAM;
+         }
+         else
+         {
+            streamerState = FILE_ERROR;
+         }
       }
       else if(streamerState == STREAM)
       {
@@ -197,6 +233,9 @@ void Streamer::onOkCancelChoiceMade(OkCancelDialog::DialogStatesT state)
       }
       else if(streamerState == CANCEL)
       {
+         // Send end of program code to GRBL
+         // Flush buffers and close files.
+         // Reset state machine.
          streamerState = LIST;
       }
    }
@@ -210,15 +249,19 @@ void Streamer::onOkCancelChoiceMade(OkCancelDialog::DialogStatesT state)
 void Streamer::Select(bool pressed)
 {
       // Let dialog handle this.
-   if(okcDialog != nullptr)
+   if(dialog != nullptr)
    {
-      okcDialog->Select(pressed);
+      dialog->Select(pressed);
       if(pressed == false)
       {
-         onOkCancelChoiceMade(okcDialog->GetState());
-         okcDialog->Close();
-         delete okcDialog;
-         okcDialog = nullptr;
+         Serial.println("Close");
+         Serial.flush();
+         dialog->Close();
+         delete dialog;
+         dialog = nullptr;
+         RefreshScreen();
+         Serial.println("done!");
+         Serial.flush();
       }
    }
    else if(streamerState == SELECT)
@@ -239,9 +282,9 @@ void Streamer::Select(bool pressed)
 void Streamer::Select(int8_t steps)
 {
    // Let dialog handle this.
-   if(okcDialog != nullptr)
+   if(dialog != nullptr)
    {
-      okcDialog->Select(steps);
+      dialog->Select(steps);
    }
    else
    {
@@ -280,6 +323,8 @@ void Streamer::HandleSelectorStateChange(uint8_t now, uint8_t was)
       tft.updateScreenAsync();
       streamerState = OFF;
    }
+   Serial.print("State3: ");Serial.println(streamerState);
+   Serial.flush();
 }
 
 void Streamer::AddLineToFilesTerminal(const char *line)
@@ -344,11 +389,12 @@ void Streamer::UpdateFilesTerminal()
 
 void Streamer::HandleConfirmationDialog()
 {
-   if(okcDialog == nullptr)
+   if(dialog == nullptr)
    {
-      okcDialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
+      dialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
                                      "Arm selected file for streaming?", OkCancelDialog::eCancel);
-      okcDialog->Draw();
+      dialog->onChoiceConnect(onOkCancelChoiceMadeConnect);
+      dialog->Draw();
    }
    else if(streamerState == CONFIRM)
    {
@@ -358,92 +404,71 @@ void Streamer::HandleConfirmationDialog()
 
 void Streamer::HandleArmFileDialog()
 {
-   if(okcDialog == nullptr)
+   if(dialog == nullptr)
    {
-      okcDialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
+      dialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
                                      "Run armed file?", OkCancelDialog::eCancel);
-      okcDialog->Draw();
+      dialog->onChoiceConnect(onOkCancelChoiceMadeConnect);
+      dialog->Draw();
    }
 }
 
 void Streamer::MonitorStreaming()
 {
-   if(okcDialog == nullptr)
+   if(dialog == nullptr)
    {
-      okcDialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
+      dialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
                                      "Pause?", OkCancelDialog::eCancel);
-      okcDialog->Draw();
+      dialog->onChoiceConnect(onOkCancelChoiceMadeConnect);
+      dialog->Draw();
    }
 }
 
 void Streamer::HandleHoldDialog()
 {
-   if(okcDialog == nullptr)
+   if(dialog == nullptr)
    {
-      okcDialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
+      dialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
                                      "Resume?", OkCancelDialog::eCancel);
-      okcDialog->Draw();
+      dialog->onChoiceConnect(onOkCancelChoiceMadeConnect);
+      dialog->Draw();
    }
 }
 
 void Streamer::ProcessStremCancel()
 {
-   if(okcDialog == nullptr)
+   if(dialog == nullptr)
    {
-      okcDialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
-                                     "Cancel?", OkCancelDialog::eCancel);
-      okcDialog->Draw();
+      dialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
+                                     "End Program?", OkCancelDialog::eCancel);
+      dialog->onChoiceConnect(onOkCancelChoiceMadeConnect);
+      dialog->Draw();
    }
-}
-//uint8_t Streamer::SendGcode(const char *data)
-//{
-//   uint8_t processed(0);
-//   //uint16_t space((outHead - outTail) & OUT_BUFFER_MASK);
-//   uint16_t space(GRBL_RX_BUFFER_SIZE - charactersSent);
-//   if(space > 0)
-//   {
-//      if(strlen(data) <= space)
-//      {
-//         processed = strlen(data);
-//      }
-//      else
-//      {
-//         processed = space;
-//      }
-//   }
-//
-//   uint8_t send(processed);
-//   while(send > 0)
-//   {
-//      userial.write(*data++);
-//      --send;
-//   }
-//
-//   grblQ.push(processed);
-//   charactersSent += processed;
-//   return(processed);
-//}
-
-void Streamer::Acknowledge()
-{
-   // Remove last acknowledged line length;
-   charactersSent -= grblQ.pop();
 }
 
 void Streamer::DisplayError()
 {
-   // Draw error dialog.
-   if(streamerState == SD_ERROR)
+   if(dialog == nullptr)
    {
-      Serial.println("SD Card error.");
-   }
-   else if(streamerState == FILE_ERROR)
-   {
-      Serial.println("File I/O error.");
-   }
-   else
-   {
-      Serial.println("GC error.");
+      const char *msg(nullptr);
+      // Draw error dialog.
+      if(streamerState == SD_ERROR)
+      {
+         msg = ("SD Card error.");
+      }
+      else if(streamerState == FILE_ERROR)
+      {
+         msg = ("File I/O error.");
+      }
+      else
+      {
+         msg = ("GC error.");
+      }
+      Serial.println(msg);
+      dialog = new MessageDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
+                                  msg);
+      dialog->onChoiceConnect(onMessageChoiceConnect);
+      dialog->Draw();
    }
 }
 

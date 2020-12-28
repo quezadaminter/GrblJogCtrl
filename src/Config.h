@@ -5,13 +5,48 @@
 #include "ILI9488_t3.h"
 
 // Selector Switches
-typedef struct
-{
-   uint8_t k;
-   const char *val;
-} uintCharStruct;
-
 #define SEL_NONE 255 // Both SW1 and SW2
+
+class uintCharStruct
+{
+   public:
+      uintCharStruct()
+      {
+         k = SEL_NONE;
+         val = "NONE";
+      }
+      uintCharStruct(uint8_t K, const char *V)
+      {
+         k = K;
+         val = V;
+      }
+
+      uint8_t k;
+      const char *val;
+};
+
+class SelectorT
+{
+   public:
+      SelectorT(volatile uintCharStruct *init){ now = init; }
+      uint8_t k() volatile { return(now->k); }
+      const char *val() volatile { return(now->val); }
+      uint8_t p() volatile { return(prev); }
+      void Reset(uint8_t pos) volatile { Position = pos; }
+      void Now(volatile uintCharStruct *n) volatile
+      { prev = now->k; now = n; Interrupt = false; changeInFrame = true; Position = SEL_NONE; }
+      bool ChangeInFrame() volatile { return(changeInFrame); }
+      void ResetChangeInFrame() volatile { changeInFrame = false; }
+      volatile uint32_t Debounce = 0;
+      volatile bool Interrupt = false;
+      volatile uint8_t Position = SEL_NONE;
+   private:
+      //static uintCharStruct emptySel;
+      volatile uintCharStruct *now = nullptr;
+      volatile uint8_t prev;
+      bool changeInFrame = false;
+};
+
 #define SYSTEM   31        // SW1.1
 #define AXIS_X 30        // SW1.2
 #define AXIS_Y 29        // SW1.3

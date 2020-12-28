@@ -6,6 +6,7 @@
 class Streamer
 {
    public:
+      Streamer();
       bool begin();
       void Select(bool pressed);
       void Select(int8_t steps);
@@ -19,6 +20,7 @@ class Streamer
       uint16_t Count() const { return(fileCount); }
 
    private:
+
       queue grblQ;
       uint16_t charactersSent = 0;
       File gcodeFile;
@@ -26,7 +28,7 @@ class Streamer
       uint16_t selectedFile = 0;
       char filesTerminal[tROWS][tCOLS];
       volatile uint8_t streamerState = 0;
-      OkCancelDialog *okcDialog = nullptr;
+      Dialog *dialog = nullptr;
 
       void AddLineToFilesTerminal(const char *line);
       void ClearFilesTerminal();
@@ -40,7 +42,12 @@ class Streamer
       void HandleHoldDialog();
       void ProcessStremCancel();
 
-      void onOkCancelChoiceMade(OkCancelDialog::DialogStatesT state);
+      void onOkCancelChoiceMade(uint8_t);
+      std::function<void(uint8_t)> onOkCancelChoiceMadeConnect;
+
+      void onMessageChoiceMade(uint8_t);
+      std::function<void(uint8_t)> onMessageChoiceConnect;
+
 };
 
 extern Streamer GC;
