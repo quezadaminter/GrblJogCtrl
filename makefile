@@ -18,7 +18,7 @@ BOARD_ID         := TEENSY41
 MCU              := imxrt1062
 
 LIBS_SHARED_BASE := C:\Users\mquezada\Documents\Arduino\libraries
-LIBS_SHARED      := ILI9488_t3 Adafruit_GFX_Library Adafruit_BusIO
+LIBS_SHARED      := ILI9488_t3 Adafruit_GFX_Library Adafruit_BusIO TeensyDebug
 
 LIBS_LOCAL_BASE   := C:\PROGRA~2\Arduino\hardware\teensy\avr\libraries
 LIBS_LOCAL       := SPI USBHost_t36 Wire SD
@@ -32,13 +32,13 @@ UPL_PJRC_B       := C:\PROGRA~2\Arduino\hardware\tools
 #******************************************************************************
 FLAGS_CPU   := -mthumb -mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16
 FLAGS_OPT   := -O2
-FLAGS_COM   := -g -Wall -ffunction-sections -fdata-sections -nostdlib -MMD
+FLAGS_COM   := -g3 -Wall -ffunction-sections -fdata-sections -nostdlib -MMD
 FLAGS_LSP   := 
 
 FLAGS_CPP   := -std=gnu++14 -fno-exceptions -fpermissive -fno-rtti -fno-threadsafe-statics -felide-constructors -Wno-error=narrowing
 FLAGS_C     := 
 FLAGS_S     := -x assembler-with-cpp
-FLAGS_LD    := -Wl,--print-memory-usage,--gc-sections,--relax,--defsym=__rtc_localtime=$(shell powershell [int](Get-Date -UFormat +%s)[0]) -T$(CORE_BASE)/imxrt1062_t41.ld
+FLAGS_LD    := -Wa,-g -Wl,--print-memory-usage,--gc-sections,--relax,--defsym=__rtc_localtime=$(shell powershell [int](Get-Date -UFormat +%s)[0]) -T$(CORE_BASE)/imxrt1062_t41.ld
 
 LIBS        := -larm_cortexM7lfsp_math -lm -lstdc++
 

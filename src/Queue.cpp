@@ -15,6 +15,19 @@ queue::queue(uint16_t size)
    count = 0;
 }
 
+queue::~queue()
+{
+   clear();
+}
+
+void queue::clear()
+{
+   while(isEmpty() == false)
+   {
+      pop();
+   }
+}
+
 // Utility function to remove front element from the queue
 uint8_t queue::pop()
 {
@@ -69,7 +82,7 @@ uint8_t queue::peek()
    {
       return front->data;
    }
-   return(NULL);      
+   return(0);      
 }
 
 // Utility function to return the size of the queue
@@ -88,4 +101,20 @@ bool queue::isEmpty()
 bool queue::isFull()
 {
    return (size() == capacity);
+}
+
+uint16_t queue::sum()
+{
+   uint16_t s(0);
+   Node *t(front);
+   while(t != rear)
+   {
+      if(t == NULL)
+      {
+         break;
+      }
+      s += t->data;
+      t = t->behind;
+   }
+   return(s);
 }

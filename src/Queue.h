@@ -31,14 +31,17 @@ class queue
    uint16_t count;		// current size of the queue
 
    public:
-   queue(uint16_t size = SIZE);		// constructor
+      queue(uint16_t size = SIZE);		// constructor
+      ~queue();
 
+   void clear();
    uint8_t pop();
    void push(uint8_t x);
    uint8_t peek();
    uint16_t size();
    bool isEmpty();
    bool isFull();
+   uint16_t sum();
 };
 
 

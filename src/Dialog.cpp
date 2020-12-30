@@ -4,15 +4,14 @@
 Dialog::Dialog(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const char *title) :
    _x(x), _y(y), _w(w), _h(h), _title(title)
 {
+   //Serial.println("HELLO D!");
+   //Serial.flush();
 }
 
-//void Dialog::onChoiceConnect(void(*func)(uint8_t state))
-//{
-//   onChoice = func;
-//}
 void Dialog::onChoiceConnect(std::function<void(uint8_t)> cb)
 {
    onChoice = std::move(cb);
+   //onChoice = cb;
 }
 
 void Dialog::DrawTitle()

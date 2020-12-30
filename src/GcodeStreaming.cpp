@@ -3,12 +3,58 @@
 #include "GcodeStreaming.h"
 #include "ILI9488_t3.h"
 
-//uint8_t outCountList[GRBL_RX_BUFFER_SIZE] = { 0 };
-//#define OUT_BUFFER_MASK (GRBL_RX_BUFFER_SIZE - 1)
-//char *outBuffer[GRBL_RX_BUFFER_SIZE] = { '\0' };
-//uint16_t outHead = 0;
-//uint16_t outTail = 0;
-//uint16_t outCount = 0;
+#ifdef USE_GDB
+#include <Arduino.h>
+#include "TeensyDebug.h"
+#pragma GCC optimize ("O0")
+#endif
+
+#define OUT_RING_BUFFER_SIZE 256//(GRBL_RX_BUFFER_SIZE * 2)
+#define OUT_BUFFER_MASK (OUT_RING_BUFFER_SIZE - 1)
+uint8_t outBuffer[OUT_RING_BUFFER_SIZE] = { '\0' };
+uint16_t outHead = 0;
+uint16_t outTail = 0;
+uint16_t outCount = 0;
+bool outData = false;
+
+void outReset()
+{
+   outHead = outTail = outCount = 0;
+   outData = false;
+}
+
+void outPush(const char *in)
+{
+   while(*in)
+   {
+      outBuffer[outHead] = *in++;
+      outHead = (outHead + 1) & OUT_BUFFER_MASK;
+      outCount++;
+   }
+   outData = true;
+}
+
+uint8_t outPop()
+{
+   uint8_t o(outBuffer[outTail]);
+   outTail = (outTail + 1) & OUT_BUFFER_MASK;
+   outCount--;
+   return(o);
+}
+
+unsigned int outAvailable()
+{
+   return ((unsigned int)(OUT_RING_BUFFER_SIZE + outHead - outTail)) % OUT_RING_BUFFER_SIZE;
+}
+
+unsigned int outSpaceAvailable()
+{
+   if(outHead >= outTail)
+   {
+      return OUT_RING_BUFFER_SIZE - 1 - outHead + outTail;
+   }
+   return outTail - outHead - 1;
+}
 
 #define OFF 0
 #define LIST 1
@@ -18,16 +64,22 @@
 #define STREAM 5
 #define HOLD 6
 #define CANCEL 7
+#define COMPLETE 8
 #define SD_ERROR 200
 #define FILE_ERROR 201
+#define LINE_TOO_LONG 202
 #define FAILED_STATE 255
+
+char dbg[128] = { '\0' };
+
+elapsedMillis streamingGRBLUpdate;
 
 Streamer GC;
 
 Streamer::Streamer()
 {
-   onOkCancelChoiceMadeConnect = std::bind(&Streamer::onOkCancelChoiceMade, *this, std::placeholders::_1);
-   onMessageChoiceConnect  = std::bind(&Streamer::onMessageChoiceMade, *this, std::placeholders::_1);
+   onOkCancelChoiceMadeConnect = std::bind(&Streamer::onOkCancelChoiceMade, this, std::placeholders::_1);
+   onMessageChoiceConnect  = std::bind(&Streamer::onMessageChoiceMade, this, std::placeholders::_1);
 }
 
 bool Streamer::begin()
@@ -103,8 +155,33 @@ bool Streamer::OpenFile(const char *name)
       gcodeFile.close();
    }
 
+   totalLinesInFile = 0;
+   lineCount = 0;
    gcodeFile = SD.open(name, FILE_READ);
 
+   while(gcodeFile.available())
+   {
+      memset(dbg, '\0', 128);
+      int32_t b(gcodeFile.read(dbg, 127));
+      while(b > 0)
+      {
+         if(dbg[b - 1] == '\n')
+         {
+            ++totalLinesInFile;
+         }
+         b--;
+      }
+#ifndef USE_GDB
+      //Serial.print(dbg);
+#endif
+   }
+   sprintf(dbg, "Found: %lu lines in file\n", totalLinesInFile);
+   AddLineToCommandTerminal(dbg);
+   dbg[0] = '\0';
+   gcodeFile.seek(0);
+   charactersSent = 0;
+   loadedLineLength = 0;
+   charactersPulledFromLine = 0;
    return(gcodeFile);
 }
 
@@ -115,99 +192,211 @@ void Streamer::CloseFile()
       gcodeFile.close();
    }
 }
-
-//bool lastLineIncomplete = false;
-//uint8_t lastProcessed = 0;
-
-bool Streamer::ReadFile(char &c)
+int lc = 0;
+char out[128] = { '\0' };
+int8_t Streamer::ReadFile()
 {
-   bool ret(true);
-   if(gcodeFile)
+   int8_t ret(1);
+   uint16_t dlen(strlen(dbg));
+   if(dlen > 0)
    {
-      uint8_t processed(0);//lastProcessed);
-      //while(true)
+      // waiting for space mate.
+      if(outSpaceAvailable() > dlen)
       {
-         if(gcodeFile.available() == true)
+         outPush(dbg);
+         dbg[0] = '\0';
+         dlen = 0;
+      }
+   }
+   else if(gcodeFile && dlen == 0)
+   {
+      char B[1] = { '\0' };
+      int32_t count(0);
+      bool skip = false;
+      while(true)
+      {
+         if(count > 127)
          {
-            if(charactersSent + processed < GRBL_RX_BUFFER_SIZE)
-            {
-               //uint8_t c(gcodeFile.read());
-               if(gcodeFile.read(&c, 1) == -1)
-               {
-                  // Read error!!! Maybe file is corrup or card was removed!
-               }
-               else
-               {
-                  ++processed;
-                  if(c == '\n')
-                  {
-                     // Complete line, store its character count.
-                     //lastLineIncomplete = false;
-                     //lastProcessed = 0;
-                     grblQ.push(processed);
-                     ret = false;
-                     //break;
-                  }
-               }
-            }
-            else
-            {
-               // Incomplete line, GRBL buffer full
-               //lastProcessed = processed;
-               //lastLineIncomplete = true;
-               ret = false;
-               //break;
-            }
+            // Buffer overrun, line too long!
+            ret = -2;
+            break;
          }
-         else
+         int32_t r(gcodeFile.read(B, 1));
+         if(r == -1)
+         {
+            ret = -1;
+            break;
+         }
+         else if(r == 0)
          {
             // EOF
-            //lastLineIncomplete = false;
-            //lastProcessed = 0;
-            grblQ.push(processed);
-            ret = false;
-            //break;
+            ret = 0;
+            gcodeFile.close();
+            break;
          }
+         else if(B[0] != ' ' && B[0] != '\r' && B[0] != '%')
+         {
+            if(B[0] == '(')
+            {
+               skip = true;
+            }
+            else if(B[0] == ')')
+            {
+               skip = false;
+            }
+            else if(skip == false)
+            {
+               dbg[count] = toupper(B[0]);
+               // Read a full line
+               if(B[0] == '\n')
+               {
+                  dbg[count + 1] = '\0';
+                  if(dbg[0] == '\n')//strlen(dbg) > 1)
+                  {
+                     dbg[0] = '\0';
+                     //if(totalLinesInFile > 0)
+                     {
+                        // Take off empty lines since those are not processed.
+                        //--totalLinesInFile;
+                        // Actually better to count it as processed. This way
+                        // it is easier to correlate a processed line number
+                        // to an entry in a file.
+                        ++lineCount;
+                     }
+                     //outPush(dbg);
+                  }
+                  //Serial.print("\rIN: ");Serial.print(strlen(dbg));Serial.print(", ");Serial.print(dbg);
+                  //Serial.flush();
+                  break;
+               }
+               else if(B[0] == ';')
+               {
+                  dbg[count] = '\n';
+                  dbg[count + 1] = '\0';
+                  if(strlen(dbg) > 1)
+                  {
+                     if(dbg[0] == '\n')
+                     {
+                        dbg[0] = '\0';
+                        // See note above.
+                        ++lineCount;
+                     }
+                     // Remove line comment and add new g code line
+                     //outPush(dbg);
+                  }
+                  break;
+               }
+               ++count;
+            }
+         }
+         
       }
-      charactersSent += processed;
    }
-   else
+
+   if(out[0] == '\0')
    {
-      ret = false;
+      // Pull a line out and make room
+      uint8_t x(0);
+      while(outAvailable() && x < 127)
+      {
+         out[x] = outPop();
+         if(out[x] == '\n')
+         {
+            ++x;
+            out[x] = '\0';
+            // Got the line
+            break;
+         }
+         ++x;
+      }
+      //Serial.print("\rMI: ");Serial.print(strlen(out));Serial.print(", ");Serial.print(x);Serial.print(", ");Serial.print(out);
+      //Serial.flush();
+      loadedLineLength = x;
+      charactersPulledFromLine = 0;
+   }
+
+   return(ret);
+}
+
+uint16_t Streamer::Available()
+{
+   uint16_t ret(0);
+
+   if(charactersSent + loadedLineLength < (GRBL_RX_BUFFER_SIZE))
+   {
+      if(lineCount < totalLinesInFile)
+      {
+         ret = loadedLineLength - charactersPulledFromLine;
+      }
+      else
+      {
+         streamerState = COMPLETE;
+      }
+      
    }
    return(ret);
+}
+
+uint8_t Streamer::Read()
+{
+   uint8_t c = out[charactersPulledFromLine];
+   charactersPulledFromLine++;
+   if(c == '\n')
+   {
+      out[charactersPulledFromLine] = '\0';
+      //Serial.print("\rOU: ");Serial.print(strlen(out));Serial.print(", ");Serial.print(out);
+      //Serial.flush();
+      grblQ.push(loadedLineLength);
+      //Serial.print("\rQ: ");Serial.print(grblQ.size());Serial.print(", ");Serial.println(grblQ.sum());
+      charactersSent += loadedLineLength;
+      ++lineCount;
+      sprintf(out, "progress: %u / %lu", lineCount, totalLinesInFile);
+      AddLineToCommandTerminal(out);
+      //Serial.print("STR: ");Serial.print(charactersReadInLine);Serial.print(", "), Serial.print(charactersSent);Serial.print(", ");Serial.println(grblQ.size());Serial.flush();
+      charactersPulledFromLine = 0;
+      loadedLineLength = 0;
+      out[0] = '\0';
+   }
+   return(c);
 }
 
 void Streamer::Acknowledge()
 {
    // Remove last acknowledged line length;
    charactersSent -= grblQ.pop();
+   //Serial.print("ACK: ");Serial.println(charactersSent);
 }
 
 void Streamer::onMessageChoiceMade(uint8_t s)
 {
    MessageDialog::DialogStatesT state(static_cast<MessageDialog::DialogStatesT>(s));
-   RefreshScreen();
    if(state == MessageDialog::eOk)
    {
-      // Close dialog
-      dialog->Close();
-      delete dialog;
-      dialog = nullptr;
+      RefreshScreen();
    }
+}
+
+const char *Streamer::GetSelectedFileName()
+{
+   uint8_t nameIndex((tROWS - 1) - selectedFile);
+   return(filesTerminal[nameIndex]);
 }
 
 void Streamer::onOkCancelChoiceMade(uint8_t s)
 {
    OkCancelDialog::DialogStatesT state(static_cast<OkCancelDialog::DialogStatesT>(s));
-   Serial.print("State1: ");Serial.println(s);
-   Serial.print("State2: ");Serial.println(streamerState);
-   Serial.flush();
+   //sprintf(dbg, "State2a: %x, %xd\n", &streamerState, this);
+   //Serial.print("State2: ");Serial.println(streamerState);
+   //Serial.println(dbg);
+   //Serial.flush();
    if(state == OkCancelDialog::eOk)
    {
       if(streamerState == CONFIRM)
       {
          streamerState = ARM_FILE;
+         char msg[tCOLS] = "Arming: ";
+         strncat(msg, GetSelectedFileName(), tCOLS - 1);
+         AddLineToCommandTerminal(msg);
       }
       else if(streamerState == ARM_FILE)
       {
@@ -241,39 +430,46 @@ void Streamer::onOkCancelChoiceMade(uint8_t s)
    }
    else
    {
-      UpdateFilesTerminal();
       streamerState = SELECT;
    }
+      //Serial.print("State5: ");Serial.println(streamerState);
 }
 
 void Streamer::Select(bool pressed)
 {
       // Let dialog handle this.
+   //Serial.print("Select1: ");Serial.println(pressed);
    if(dialog != nullptr)
    {
+      //Serial.print("State4: ");Serial.println(streamerState);
+      //sprintf(dbg, "State4a: %x, %xd\n", &streamerState, this);
+      //Serial.println(dbg);
       dialog->Select(pressed);
       if(pressed == false)
       {
-         Serial.println("Close");
-         Serial.flush();
+         RefreshScreen();
+         UpdateFilesTerminal();
+         //Serial.println("Close");
+         //Serial.flush();
          dialog->Close();
          delete dialog;
          dialog = nullptr;
-         RefreshScreen();
-         Serial.println("done!");
-         Serial.flush();
+         //Serial.println("done!");
+         //Serial.flush();
       }
+      //Serial.print("State6: ");Serial.println(streamerState);
    }
    else if(streamerState == SELECT)
    {
+      //Serial.print("Select2: ");Serial.println(pressed);
       if(pressed == true)
       {
 
       }
       else
       {
-         uint8_t nameIndex((tROWS - 1) - selectedFile);
-         Serial.print("Picked: "); Serial.print(selectedFile); Serial.print(" "); Serial.println(filesTerminal[nameIndex]);
+         //uint9_t nameIndex((tROWS - 1) - selectedFile);
+         //Serial.print("Picked: "); Serial.print(selectedFile); Serial.print(" "); Serial.println(filesTerminal[nameIndex]);
          streamerState = CONFIRM;
       }
    }
@@ -301,8 +497,8 @@ void Streamer::Select(int8_t steps)
       {
          selectedFile += steps;
       }
-      uint8_t nameIndex((tROWS - 1) - selectedFile);
-      Serial.print("Selected: "); Serial.print(selectedFile); Serial.print(" "); Serial.println(filesTerminal[nameIndex]);
+      //uint8_t nameIndex((tROWS - 1) - selectedFile);
+      //Serial.print("Selected: "); Serial.print(selectedFile); Serial.print(" "); Serial.println(filesTerminal[nameIndex]);
 
       UpdateFilesTerminal();
    }
@@ -320,11 +516,16 @@ void Streamer::HandleSelectorStateChange(uint8_t now, uint8_t was)
       // Switched out of files mode.
       ClearFilesTerminal();
       UpdateFilesTerminal();
+      if(dialog != nullptr)
+      {
+         dialog->Close();
+         delete dialog;
+         dialog = nullptr;
+      }
+      RefreshScreen();
       tft.updateScreenAsync();
       streamerState = OFF;
    }
-   Serial.print("State3: ");Serial.println(streamerState);
-   Serial.flush();
 }
 
 void Streamer::AddLineToFilesTerminal(const char *line)
@@ -415,12 +616,36 @@ void Streamer::HandleArmFileDialog()
 
 void Streamer::MonitorStreaming()
 {
-   if(dialog == nullptr)
+   // Pull data from SD card into memory ring buffer
+   int8_t r(ReadFile());
+   if(r > 0)
    {
-      dialog = new OkCancelDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
-                                     "Pause?", OkCancelDialog::eCancel);
-      dialog->onChoiceConnect(onOkCancelChoiceMadeConnect);
-      dialog->Draw();
+   }
+   else
+   {
+      if(r == 0)
+      {
+         // EOF
+         if(dialog == nullptr)
+         {
+            dialog = new MessageDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
+                                        "End of file reached!");
+            dialog->onChoiceConnect(onMessageChoiceConnect);
+            dialog->Draw();
+            //streamerState = COMPLETE;
+         }
+      }
+      else if(r == -2)
+      {
+         streamerState = LINE_TOO_LONG;
+         //DisplayError();
+      }
+      else
+      {
+         // Read error
+         streamerState = FILE_ERROR;
+         //DisplayError();
+      }
    }
 }
 
@@ -460,11 +685,15 @@ void Streamer::DisplayError()
       {
          msg = ("File I/O error.");
       }
+      else if(streamerState == LINE_TOO_LONG)
+      {
+         msg = "GCODE line too long!";
+      }
       else
       {
          msg = ("GC error.");
       }
-      Serial.println(msg);
+      //Serial.println(msg);
       dialog = new MessageDialog((tft.width() - 220) / 2, (tft.height() - 160) / 2, 220, 160,
                                   msg);
       dialog->onChoiceConnect(onMessageChoiceConnect);
@@ -516,6 +745,7 @@ void Streamer::Update()
          break;
       case(SD_ERROR):
       case(FILE_ERROR):
+      case(LINE_TOO_LONG):
             DisplayError();
             streamerState = FAILED_STATE;
          break;

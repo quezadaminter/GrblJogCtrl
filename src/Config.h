@@ -1,6 +1,8 @@
 #ifndef _CONFIG
 #define _CONFIG
 
+//#define USE_GDB
+
 #include <stdint.h>
 #include "ILI9488_t3.h"
 
@@ -73,6 +75,7 @@ extern ILI9488_t3 tft;
 extern void RefreshScreen();
 extern void Text(uint16_t x, uint16_t y, const char *text);
 extern void Text(uint16_t x, uint16_t y, const char *text, size_t len);
+extern void AddLineToCommandTerminal(const char *line);
 
 // GRBL
 enum grblStatesT { eUnknownState, eConnected, eIdle, eRun, eHold, eJog, eAlarm, eDoor, eCheck, eHome, eSleep };

@@ -46,7 +46,7 @@ void MessageDialog::DrawButtons(bool selected)
 {
    int16_t x, y;
    uint16_t w, h;
-   uint16_t bw(_w / 3), bh(_h / 3), bx((_w - bw) / 2), by((_y + _h) - (bh + 3));
+   uint16_t bw(_w / 3), bh(_h / 3), bx(_x + ((_w - bw) / 2)), by((_y + _h) - (bh + 3));
 
    tft.getTextBounds("Ok", bx, by, &x, &y, &w, &h);
    uint16_t tx(bx + ((bw - w) / 2)), ty(by + ((bh - h) / 2));

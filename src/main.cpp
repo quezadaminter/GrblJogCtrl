@@ -21,6 +21,13 @@
 #include "GcodeStreaming.h"
 #include "ILI9488_t3.h"
 #include "USBHost_t36.h"
+#include "Version.h"
+
+#ifdef USE_GDB
+#include "TeensyDebug.h"
+#pragma GCC optimize ("O0")
+#endif
+
 #define USBBAUD 115200
 uint32_t baud = USBBAUD;
 uint32_t format = USBHOST_SERIAL_8N1;
@@ -156,6 +163,8 @@ void Blank();
 // GRBL
 enum gCodeSenderType { eNoSender, eSelfSender, eExternalSender };
 #define GRBL_STATUS_TIMEOUT 1000
+#define GRBL_STATUS_SELF_SENDER_TIMEOUT 200
+uint16_t grblStatusTimeout(GRBL_STATUS_TIMEOUT);
 elapsedMillis grblStatusTimer;
 gCodeSenderType gCodeSender = eNoSender;
 char statusBuffer[300] = { '\0' };
@@ -398,7 +407,12 @@ void setup()
     delayMicroseconds(50);
   }
 
+#ifdef USE_GDB
+   Serial.begin(115200);
+   debug.begin(Serial);
+#else
   while (!Serial && (millis() < 5000)) ; // wait for Arduino Serial Monitor
+#endif
 
   myusb.begin();
 
@@ -462,6 +476,9 @@ void setup()
   BM.begin(BMCLK, BMSOL, BMQH);
   BM.onChangeConnect(HandleButtonChange);
 
+#ifdef USE_GDB
+   halt();
+#endif
   // TODO: Wait for Grbl to connect
   //SynchronizeWithGrbl();
 }
@@ -985,7 +1002,7 @@ char ReadUSBSerial()
 {
    // Read from Grbl and forward to computer.
    char c(userial.read());
-   Serial.write(c);
+   //Serial.write(c);
    return(c);
 }
 
@@ -1470,7 +1487,7 @@ void RefreshScreen()
    if(Sel1Pos.k() == LCDBRT)
    {
       UpdateLCDBrightnessIndication();
-    }
+   }
 }
 
 void UpdateClockDisplay()
@@ -1557,6 +1574,10 @@ void Blank()
    tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
    Text(287, 30, "MPOS");
    Text(397, 30, "WPOS");
+   tft.setTextSize(1);
+   //Text(140, 0, VERSION_DATA[0]);
+   //Text(140, 8, VERSION_DATA[1]);
+   //Text(140, 16, VERSION_DATA[2]);
 }
 
 void DrawTestPattern()
@@ -1824,7 +1845,7 @@ void UpdateGrblTerminal()
                if(strlen(terminal[r]) > 6)
                {
                   uint8_t e(atoi(&terminal[r][6]));
-                  const char *ec(grblErrorDesc[e]);
+                  const char *ec(grblErrorDesc[e - 1]);
                   AddLineToCommandTerminal(ec);
                }
             }
@@ -2069,7 +2090,7 @@ void loop()
    ///////////////////////////////////////////////////////////
    // Once the inputs are checked, use them to update the
    // system state.
-   if(gCodeSender == eNoSender && displayRefresh >= 500)
+   if(gCodeSender != eExternalSender && displayRefresh >= 500)
    {
        displayRefresh -= 500;
        UpdateClockDisplay();
@@ -2106,18 +2127,32 @@ void loop()
 
    // Update the sender state.
    GC.Update();
+   if(GC.State() == 5 && (grblState.state == eRun || grblState.state == eJog))
+   {
+      if(gCodeSender != eSelfSender)
+      {
+         gCodeSender = eSelfSender;
+      }
+      grblStatusTimeout = GRBL_STATUS_SELF_SENDER_TIMEOUT;
+   }
+   else
+   {
+      gCodeSender = eNoSender;
+      grblStatusTimeout = GRBL_STATUS_TIMEOUT;
+   }
 
    // Request an update of the status in GRBL
-  if(gCodeSender == eNoSender && grblStatusTimer >= GRBL_STATUS_TIMEOUT)
+  if(gCodeSender != eExternalSender && grblStatusTimer >= grblStatusTimeout)
   {
-     grblStatusTimer -= GRBL_STATUS_TIMEOUT;
+     grblStatusTimer -= grblStatusTimeout;
      // Get a status update
      userial.write('?');
   }
-  else if(gCodeSender == eExternalSender && grblStatusTimer >= (GRBL_STATUS_TIMEOUT * 5))
+  else if(gCodeSender != eNoSender && grblStatusTimer >= (grblStatusTimeout * 5))
   {
      // Maybe disconnected?
      gCodeSender = eNoSender;
+     grblStatusTimeout = GRBL_STATUS_TIMEOUT;
   }
 
   // Pass the serial data to GRBL. Check if it is comming
@@ -2125,13 +2160,22 @@ void loop()
    //while(Serial.available())
    while (true)
    {
-      char c('\0');
+      uint8_t c('\0');
       if(gCodeSender == eSelfSender)
       {
-         if(GC.ReadFile(c) == false)
+         if(GC.Available() > 0)
+         {
+            c = GC.Read();
+         }
+         else
          {
             break;
          }
+         if(c == '\n')
+         {
+            Serial.print('\r');
+         }
+         Serial.print((char)c);
       }
       else
       {
@@ -2148,7 +2192,7 @@ void loop()
       userial.write(c);
 
       // This was not sent by us.
-      if (c == '?')
+      if(c == '?' && gCodeSender != eSelfSender)
       {
          gCodeSender = eExternalSender;
          grblStatusTimer = 0;
