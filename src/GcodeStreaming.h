@@ -19,7 +19,40 @@ class Streamer
       void Acknowledge();
       void Update();
       uint16_t Count() const { return(fileCount); }
-      uint8_t State()  const { return(streamerState); }
+      uint32_t TotalLines() const { return(totalLinesInFile); }
+      uint32_t ProcessedLines() const { return(lineCount); }
+      uint16_t RingBufferSpaceAvailable() const;
+
+#define STREAM_STATUS_ENUM \
+ADD_ENUM(OFF)\
+ADD_ENUM(LIST)\
+ADD_ENUM(SELECT)\
+ADD_ENUM(CONFIRM)\
+ADD_ENUM(ARM_FILE)\
+ADD_ENUM(STREAM)\
+ADD_ENUM(HOLD)\
+ADD_ENUM(CANCEL)\
+ADD_ENUM(COMPLETE)\
+ADD_ENUM(SD_ERROR)\
+ADD_ENUM(FILE_ERROR)\
+ADD_ENUM(LINE_TOO_LONG)\
+ADD_ENUM(FAILED_STATE)
+
+enum streamStatusT
+{
+#define ADD_ENUM(eVal) eVal,
+   STREAM_STATUS_ENUM
+#undef ADD_ENUM
+   eStatusRange
+};
+
+const char *statusImage[eStatusRange] =
+{
+#define ADD_ENUM(eVal) #eVal,
+   STREAM_STATUS_ENUM
+#undef ADD_ENUM
+};
+      streamStatusT State()  const { return(streamerState); }
 
    private:
 
@@ -33,7 +66,7 @@ class Streamer
       uint16_t fileCount = 0;
       uint16_t selectedFile = 0;
       char filesTerminal[tROWS][tCOLS];
-      uint8_t streamerState = 0;
+      streamStatusT streamerState = OFF;
       Dialog *dialog = nullptr;
 
       void AddLineToFilesTerminal(const char *line);

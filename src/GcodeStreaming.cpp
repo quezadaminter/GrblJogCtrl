@@ -9,6 +9,8 @@
 #pragma GCC optimize ("O0")
 #endif
 
+
+// This buffers data from SD card.
 #define OUT_RING_BUFFER_SIZE 256//(GRBL_RX_BUFFER_SIZE * 2)
 #define OUT_BUFFER_MASK (OUT_RING_BUFFER_SIZE - 1)
 uint8_t outBuffer[OUT_RING_BUFFER_SIZE] = { '\0' };
@@ -56,19 +58,19 @@ unsigned int outSpaceAvailable()
    return outTail - outHead - 1;
 }
 
-#define OFF 0
-#define LIST 1
-#define SELECT 2
-#define CONFIRM 3
-#define ARM_FILE 4
-#define STREAM 5
-#define HOLD 6
-#define CANCEL 7
-#define COMPLETE 8
-#define SD_ERROR 200
-#define FILE_ERROR 201
-#define LINE_TOO_LONG 202
-#define FAILED_STATE 255
+//#define OFF 0
+//#define LIST 1
+//#define SELECT 2
+//#define CONFIRM 3
+//#define ARM_FILE 4
+//#define STREAM 5
+//#define HOLD 6
+//#define CANCEL 7
+//#define COMPLETE 8
+//#define SD_ERROR 200
+//#define FILE_ERROR 201
+//#define LINE_TOO_LONG 202
+//#define FAILED_STATE 255
 
 char dbg[128] = { '\0' };
 
@@ -544,6 +546,11 @@ void Streamer::AddLineToFilesTerminal(const char *line)
    }
 }
 
+uint16_t Streamer::RingBufferSpaceAvailable() const
+{
+   return(OUT_RING_BUFFER_SIZE - outCount);
+}
+
 void Streamer::ClearFilesTerminal()
 {
   memset(filesTerminal, '\0', sizeof(filesTerminal[0][0]) * tROWS * tCOLS);
@@ -620,6 +627,7 @@ void Streamer::MonitorStreaming()
    int8_t r(ReadFile());
    if(r > 0)
    {
+      // Draw progress on screen on a timer.
    }
    else
    {

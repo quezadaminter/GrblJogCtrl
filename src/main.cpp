@@ -200,9 +200,9 @@ void SynchronizeWithGrbl();
 
 #define GRBL_STATUS_ENUM \
 ADD_ENUM(eStatus)\
-ADD_ENUM(eMPosX)\
-ADD_ENUM(eMPosY)\
-ADD_ENUM(eMPosZ)\
+ADD_ENUM(eRPosX)\
+ADD_ENUM(eRPosY)\
+ADD_ENUM(eRPosZ)\
 ADD_ENUM(eFeed)\
 ADD_ENUM(eSpindle)\
 ADD_ENUM(ePlanner)\
@@ -1002,7 +1002,7 @@ char ReadUSBSerial()
 {
    // Read from Grbl and forward to computer.
    char c(userial.read());
-   //Serial.write(c);
+   Serial.write(c);
    return(c);
 }
 
@@ -1057,14 +1057,30 @@ uint16_t ParseStatusMessage(char *msg)
             char *ch = strtok(statusFields[i], ":,");
             
             ch = strtok(NULL, ":,");
-            statusValues[eMPosX] = ch;
-            grblState.MPOS[0] = atof(statusValues[eMPosX]);
+            statusValues[eRPosX] = ch;
+            grblState.RPOS[0] = atof(statusValues[eRPosX]);
             ch = strtok(NULL, ":,");
-            statusValues[eMPosY] = ch;
-            grblState.MPOS[1] = atof(statusValues[eMPosY]);
+            statusValues[eRPosY] = ch;
+            grblState.RPOS[1] = atof(statusValues[eRPosY]);
             ch = strtok(NULL, ":,");
-            statusValues[eMPosZ] = ch;
-            grblState.MPOS[2] = atof(statusValues[eMPosZ]);
+            statusValues[eRPosZ] = ch;
+            grblState.RPOS[2] = atof(statusValues[eRPosZ]);
+            grblState.positionIsMPos = true;
+         }
+         else if(strstr(statusFields[i], "WPos") != NULL)
+         {
+            char *ch = strtok(statusFields[i], ":,");
+            
+            ch = strtok(NULL, ":,");
+            statusValues[eRPosX] = ch;
+            grblState.RPOS[0] = atof(statusValues[eRPosX]);
+            ch = strtok(NULL, ":,");
+            statusValues[eRPosY] = ch;
+            grblState.RPOS[1] = atof(statusValues[eRPosY]);
+            ch = strtok(NULL, ":,");
+            statusValues[eRPosZ] = ch;
+            grblState.RPOS[2] = atof(statusValues[eRPosZ]);
+            grblState.positionIsMPos = false;
          }
          else if(strstr(statusFields[i], "F") != NULL)
          {
@@ -1681,14 +1697,29 @@ void UpdateStatusDisplay()
       
       tft.setTextSize(2);
       tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
-      sprintf(s, "X %8.3f %8.3f", grblState.MPOS[0], grblState.MPOS[0] - grblState.WCO[0]);
-      Text(x, y, s);
-      y = 68;
-      sprintf(s, "Y %8.3f %8.3f", grblState.MPOS[1], grblState.MPOS[1] - grblState.WCO[1]);
-      Text(x, y, s);
-      y = 84;
-      sprintf(s, "Z %8.3f %8.3f", grblState.MPOS[2], grblState.MPOS[2] - grblState.WCO[2]);
-      Text(x, y, s);
+      if(grblState.positionIsMPos == true)
+      {
+         sprintf(s, "X %8.3f %8.3f", grblState.RPOS[0], grblState.RPOS[0] - grblState.WCO[0]);
+         Text(x, y, s);
+         y = 68;
+         sprintf(s, "Y %8.3f %8.3f", grblState.RPOS[1], grblState.RPOS[1] - grblState.WCO[1]);
+         Text(x, y, s);
+         y = 84;
+         sprintf(s, "Z %8.3f %8.3f", grblState.RPOS[2], grblState.RPOS[2] - grblState.WCO[2]);
+         Text(x, y, s);
+      }
+      else
+      {
+         sprintf(s, "X %8.3f %8.3f", grblState.RPOS[0] + grblState.WCO[0], grblState.RPOS[0]);
+         Text(x, y, s);
+         y = 68;
+         sprintf(s, "Y %8.3f %8.3f", grblState.RPOS[1] + grblState.WCO[1], grblState.RPOS[1]);
+         Text(x, y, s);
+         y = 84;
+         sprintf(s, "Z %8.3f %8.3f", grblState.RPOS[2] + grblState.WCO[2], grblState.RPOS[2]);
+         Text(x, y, s);
+      }
+      
 
 
       tft.setTextSize(1);
@@ -1824,7 +1855,8 @@ void UpdateGrblTerminal()
 
       int16_t x, y;
       uint16_t cw, ch;
-      int8_t r = tROWS - 1;
+      int8_t count = tROWS;
+      int8_t r = count - 1;
 
       tft.getTextBounds("0", 0, 0, &x, &y, &cw, &ch);
       //tft.fillRect(0, 0, cw * tCOLS - 1, tft.height(), ILI9488_OLIVE);
@@ -1833,7 +1865,7 @@ void UpdateGrblTerminal()
 
       while(r >= 0)
       {
-         if(terminal[r] != NULL && r > 5)
+         if(terminal[r] != NULL)
          {
             if(strcmp(terminal[r], "ok") == 0)
             {
@@ -1863,7 +1895,7 @@ void UpdateGrblTerminal()
             {
                tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
             }
-            Text(0,(r * ch) , terminal[r]);
+            Text(0, tft.height() - ((count - r) * ch), terminal[r]);
          }
          --r;
       }
@@ -2127,7 +2159,7 @@ void loop()
 
    // Update the sender state.
    GC.Update();
-   if(GC.State() == 5 && (grblState.state == eRun || grblState.state == eJog))
+   if(GC.State() == Streamer::STREAM && (grblState.state == eRun || grblState.state == eJog))
    {
       if(gCodeSender != eSelfSender)
       {
@@ -2171,11 +2203,11 @@ void loop()
          {
             break;
          }
-         if(c == '\n')
-         {
-            Serial.print('\r');
-         }
-         Serial.print((char)c);
+         //if(c == '\n')
+         //{
+         //   Serial.print('\r');
+         //}
+         //Serial.print((char)c);
       }
       else
       {

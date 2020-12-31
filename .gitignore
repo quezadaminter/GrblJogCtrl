@@ -12,6 +12,7 @@
 src/Version.cpp
 *.poop
 
+
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 

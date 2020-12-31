@@ -101,8 +101,10 @@ typedef struct
 {
    grblStatesT state = eUnknownState;
 
-   // Machine position
-   float MPOS[3] = { 0.f, 0.f, 0.f };
+   // Reported position
+   float RPOS[3] = { 0.f, 0.f, 0.f };
+   // Grbl > 1.1 reports either MPos or WPos depending on value of $10
+   bool positionIsMPos = true;
    // Active work coordinate offset
    float WCO[3] = { 0.f, 0.f, 0.f };
    // Buffer
