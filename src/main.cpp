@@ -609,19 +609,23 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                   switch(button)
                   {
                      case(BTN_ProbeX):
+                     // For the probe commands, it would be nice to let
+                     // the user pick the direction of travel before probing,
+                     // the distance to probe and the offset to set the
+                     // position to.
                         controllerState = CONTROLLER_PROBEX;
-                        //SendToGrbl(GRBL_PROBE_X);
-                        //SendToGrbl(GRBL_SET_X_ZERO);
+                        SendToGrbl(GRBL_PROBE_X);
+                        SendToGrbl(GRBL_SET_X_ZERO);
                         break;
                      case(BTN_ProbeY):
                         controllerState = CONTROLLER_PROBEY;
-                        //SendToGrbl(GRBL_PROBE_Y);
-                        //SendToGrbl(GRBL_SET_Y_ZERO);
+                        SendToGrbl(GRBL_PROBE_Y);
+                        SendToGrbl(GRBL_SET_Y_ZERO);
                         break;
                      case(BTN_ProbeZ):
                         controllerState = CONTROLLER_PROBEZ;
-                        //SendToGrbl(GRBL_PROBE_Z);
-                        //SendToGrbl(GRBL_SET_Z_ZERO);
+                        SendToGrbl(GRBL_PROBE_Z);
+                        SendToGrbl(GRBL_SET_Z_ZERO);
                         break;
 
                      case(BTN_G54):
