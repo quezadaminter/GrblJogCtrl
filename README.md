@@ -10,4 +10,8 @@ Beyond that, it can read gcode from files placed on a SD card. The controller ca
 Demo videos:  
 https://www.youtube.com/watch?v=UvRLiaFA8Ps  
 https://www.youtube.com/watch?v=HVsqZHhviag  
-https://www.youtube.com/watch?v=aRfksGpZmzs
+https://www.youtube.com/watch?v=aRfksGpZmzs 
+
+# Schematic
+https://github.com/quezadaminter/GrblJogCtrlSchematic  
+
