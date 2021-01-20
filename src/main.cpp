@@ -758,6 +758,31 @@ void TestSelector2()
    Sel2Pos.Debounce = millis();
 }
 
+float GetMachinePosition(char axis)
+{
+   float pos(0.f);
+   if(axis == 'X')
+   {
+      pos = grblState.positionIsMPos ? grblState.RPOS[0] : grblState.RPOS[0] + grblState.WCO[0];
+   }
+   else if(axis == 'Y')
+   {
+      pos = grblState.positionIsMPos ? grblState.RPOS[1] : grblState.RPOS[1] + grblState.WCO[1];
+   }
+   else if(axis == 'Z')
+   {
+      pos = grblState.positionIsMPos ? grblState.RPOS[2] : grblState.RPOS[2] + grblState.WCO[2];
+   }
+   return(pos);
+}
+
+float LimitTravelRequest(float s, char XYZ)
+{
+   // Available travel distance within limits.
+   float d(s > 0 ? grblState.axisMaxTravel[0] - GetMachinePosition(XYZ) : GetMachinePosition(XYZ) - 0);
+   return(s > d ? d : s < -d ? -d : s);
+}
+
 uint16_t interpolateFeedRateFromStepTimeDelta(float x, float in_min, float in_max, uint16_t out_min, uint16_t out_max)
 {
   return (in_min - x) * (out_max - out_min) / (in_min - in_max) + out_min;
@@ -824,11 +849,11 @@ void ProcessEncoderRotation(int8_t steps)
    {
       int8_t dir(steps > 0 ? 1 : -1);
       const char *XYZ(Sel1Pos.k() == AXIS_X ? "X" : Sel1Pos.k() == AXIS_Y ? "Y" : "Z");
+      float s(0); // Travel distance (mm)
+      float f(0); // Feed rate (mm / min)
       if(Sel2Pos.k() == JOG)
       {
          time_t delta(uSecs - olduSecs);
-         float f(0); // Feed rate (mm / min)
-         float s(0); // Travel distance (mm)
          if(delta > 100)
          {
             // Slow commands in jog mode that
@@ -846,28 +871,45 @@ void ProcessEncoderRotation(int8_t steps)
             //Jog_StepsPerRevolution(delta, dir, f, s);
          }
          
-         sprintf(grblJogCommand, "$J=G91F%.3f%s%.3f", f, XYZ, s);
-         SendToGrbl(grblJogCommand);
+         // Limit travel
+         //s = LimitTravelRequest(s, XYZ[0]);
+         //sprintf(grblJogCommand, "$J=G91F%.3f%s%.3f", f, XYZ, s);
+         //SendToGrbl(grblJogCommand);
       }
       else if(Sel2Pos.k() == XP1)
       {
-         sprintf(grblJogCommand, "$J=G91F1000%s%.3f", XYZ, 0.1 * dir);
-         SendToGrbl(grblJogCommand);
+         s = 0.1 * dir;
+         f = 1000.0;
+         //sprintf(grblJogCommand, "$J=G91F1000%s%.3f", XYZ, 0.1 * dir);
+         //SendToGrbl(grblJogCommand);
       }
       else if(Sel2Pos.k() == X1)
       {
-         sprintf(grblJogCommand, "$J=G91F1000%s%d", XYZ, dir);
-         SendToGrbl(grblJogCommand);
+         s = dir;
+         f = 1000.0;
+         //sprintf(grblJogCommand, "$J=G91F1000%s%d", XYZ, dir);
+         //SendToGrbl(grblJogCommand);
       }
       else if(Sel2Pos.k() == X10)
       {
-         sprintf(grblJogCommand, "$J=G91F3000%s%d", XYZ, 10 * dir);
-         SendToGrbl(grblJogCommand);
+         s = 10 * dir;
+         f = 3000.0;
+         //sprintf(grblJogCommand, "$J=G91F3000%s%d", XYZ, 10 * dir);
+         //SendToGrbl(grblJogCommand);
       }
       else if(Sel2Pos.k() == X100 && Sel1Pos.k() != AXIS_Z)// _EncSteps != 0)
       {
          // 100 is too big for the Z axis. Allow this only for X and Y.
-         sprintf(grblJogCommand, "$J=G91F5000%s%d", XYZ, 100 * dir);
+         s = 100 * dir;
+         f = 5000.0;
+         //sprintf(grblJogCommand, "$J=G91F5000%s%d", XYZ, 100 * dir);
+         //SendToGrbl(grblJogCommand);
+      }
+
+      if(f > 0)
+      {
+         s = LimitTravelRequest(s, XYZ[0]);
+         sprintf(grblJogCommand, "$J=G91F%f%s%d", f, XYZ, s);
          SendToGrbl(grblJogCommand);
       }
    }
