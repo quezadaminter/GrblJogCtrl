@@ -2342,14 +2342,14 @@ void loop()
      {
         RefreshScreen();
      }
-     else if(Sel1Pos.k() == SPINDLE)
+     else if(Sel1Pos.k() == SPINDLE && grblState.state != eRun)
      {
         char s[20] = { '\0' };
         sprintf(s, "S%ld", grblState.cmdSpindleSpeed);
         SendToGrbl(s);
         RequestGrblStateUpdate(GCREQ);
      }
-     else if(Sel1Pos.k() == FEEDRATE)
+     else if(Sel1Pos.k() == FEEDRATE && grblState.state != eRun)
      {
         char s[20] = { '\0' };
         sprintf(s, "F%ld", grblState.cmdFeedRate);
