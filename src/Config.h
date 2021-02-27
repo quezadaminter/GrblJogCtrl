@@ -117,6 +117,8 @@ typedef struct
    int32_t cmdSpindleSpeed = 0;
    float programmedSpindleSpeed = 0.f;
 
+   // Commanded travel
+   float cmdTravel[3] = {0.f, 0.f, 0.f };
    // Feed Rate
    float currentFeedRate = 0.f;
    float programmedFeedRate = 0.f;

@@ -671,12 +671,24 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                         break;
 
                      case(BTN_GotoX0):
+                        if(grblState.isHomed == true)
+                        {
+                           grblState.cmdTravel[0] = grblState.WCO[0];
+                        }
                         SendToGrbl(GRBL_JOG_TO_X0);
                         break;
                      case(BTN_GotoY0):
+                        if(grblState.isHomed == true)
+                        {
+                           grblState.cmdTravel[1] = grblState.WCO[1];
+                        }
                         SendToGrbl(GRBL_JOG_TO_Y0);
                         break;
                      case(BTN_GotoZ0):
+                        if(grblState.isHomed == true)
+                        {
+                           grblState.cmdTravel[2] = grblState.WCO[2];
+                        }
                         SendToGrbl(GRBL_JOG_TO_Z0);
                         break;
                      case(BTN_GotoX0Y0):
@@ -785,8 +797,25 @@ float LimitTravelRequest(float s, char XYZ)
    // Available travel distance within limits.
    if(grblState.isHomed == true)
    {
-      float d(s > 0 ? grblState.axisMaxTravel[0] - GetMachinePosition(XYZ) : GetMachinePosition(XYZ) - 0);
-      return(s > d ? d : s < -d ? -d : s);
+      //char buf[20] = { '\0' };
+      //char *x = "1";
+      uint8_t a(XYZ == 'X' ? 0 : XYZ == 'Y' ? 1 : 2);
+      if(s > 0 && (grblState.cmdTravel[a] + s) > grblState.axisMaxTravel[a])
+      {
+         s = grblState.state == eIdle ? grblState.axisMaxTravel[a] - grblState.cmdTravel[a] : 0;
+         //x = "2";
+      }
+      else if(s < 0 && (grblState.cmdTravel[a] + s) < 0)
+      {
+         s = grblState.state == eIdle ? grblState.cmdTravel[a] : 0;
+         //x = "3";
+      }
+
+      // Track the amount of distance travel requested
+      grblState.cmdTravel[a] += s;
+      //sprintf(buf, "%.1f, %.1f, %.1f, %s, %d", grblState.cmdTravel[a], s, grblState.axisMaxTravel[a], x, grblState.state);
+      //AddLineToCommandTerminal(buf);
+      return(s);
    }
    return(s);
 }
@@ -1693,6 +1722,14 @@ void UpdateStatusDisplay()
       }
       else if(CompareStrings(statusValues[eStatus], "Idle"))
       {
+         if(grblState.state == eHome)
+         {
+            // Just finished a successful homing cycle, reset the
+            // distance tracker to the WCO.
+            grblState.cmdTravel[0] = grblState.WCO[0];
+            grblState.cmdTravel[1] = grblState.WCO[1];
+            grblState.cmdTravel[2] = grblState.WCO[2];
+         }
          grblState.state = eIdle;
          tft.setTextColor(ILI9488_BLACK, ILI9488_YELLOW);
       }
