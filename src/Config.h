@@ -101,6 +101,8 @@ typedef struct
 {
    grblStatesT state = eUnknownState;
 
+   bool isHomed = false;
+
    // Reported position
    float RPOS[3] = { 0.f, 0.f, 0.f };
    // Grbl > 1.1 reports either MPos or WPos depending on value of $10
@@ -223,7 +225,7 @@ extern grblStateStruct grblState;
 #define GRBL_FLOODCOOLANT 0xA0
 #define GRBL_MISTCOOLANT 0xA1
 
-// Configuration Registers
+// Configuration Registers (SAMPLE)
 //$0=10 	Step pulse, microseconds
 //$1=255	Step idle delay, milliseconds
 //$2=0 	Step port invert, mask

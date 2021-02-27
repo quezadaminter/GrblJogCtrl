@@ -778,9 +778,17 @@ float GetMachinePosition(char axis)
 
 float LimitTravelRequest(float s, char XYZ)
 {
+   // If the machine has been homed then protect the travel, else
+   // allow any input to allow motion after unlocking GRBL after
+   // and alarm state.
+
    // Available travel distance within limits.
-   float d(s > 0 ? grblState.axisMaxTravel[0] - GetMachinePosition(XYZ) : GetMachinePosition(XYZ) - 0);
-   return(s > d ? d : s < -d ? -d : s);
+   if(grblState.isHomed == true)
+   {
+      float d(s > 0 ? grblState.axisMaxTravel[0] - GetMachinePosition(XYZ) : GetMachinePosition(XYZ) - 0);
+      return(s > d ? d : s < -d ? -d : s);
+   }
+   return(s);
 }
 
 uint16_t interpolateFeedRateFromStepTimeDelta(float x, float in_min, float in_max, uint16_t out_min, uint16_t out_max)
@@ -909,7 +917,7 @@ void ProcessEncoderRotation(int8_t steps)
       if(f > 0)
       {
          s = LimitTravelRequest(s, XYZ[0]);
-         sprintf(grblJogCommand, "$J=G91F%f%s%d", f, XYZ, s);
+         sprintf(grblJogCommand, "$J=G91F%f%s%f", f, XYZ, s);
          SendToGrbl(grblJogCommand);
       }
    }
@@ -1673,6 +1681,7 @@ void UpdateStatusDisplay()
       if(CompareStrings(statusValues[eStatus], "Alarm"))
       {
          grblState.state = eAlarm;
+         grblState.isHomed = false;
          tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
       }
       else if(CompareStrings(statusValues[eStatus], "Door")  ||
@@ -1710,6 +1719,7 @@ void UpdateStatusDisplay()
       else if(CompareStrings(statusValues[eStatus], "Home"))
       {
          grblState.state = eHome;
+         grblState.isHomed = true;
          tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
       }
       else if(CompareStrings(statusValues[eStatus], "Hold") ||
