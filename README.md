@@ -15,6 +15,7 @@ https://www.youtube.com/watch?v=aRfksGpZmzs
 # Parts Used
 1- Teensy 4.1 Development Board.  
 1- ILI9488 LCD https://www.buydisplay.com/serial-spi-3-5-inch-tft-lcd-module-in-320x480-optl-touchscreen-ili9488  
+1- 50 pin LCD breakout adapter board. Link in the schematic.  
 1- 12 Button key pad, I made my own but there are many options out there.  
 1- Shift register IC to read keypad.  
 2- 12 position rotary selector switches (12PST).  
