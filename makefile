@@ -42,8 +42,17 @@ FLAGS_LD    := -Wa,-g -Wl,--print-memory-usage,--gc-sections,--relax,--defsym=__
 
 LIBS        := -larm_cortexM7lfsp_math -lm -lstdc++
 
+#******************************************************************************
+# Git details
+#******************************************************************************
+GIT_V := $(shell powershell git describe --abbrev=16 --dirty --always --tags)
+GIT_V2 := $(shell powershell git rev-parse --short=16 HEAD)
+GIT_B := $(shell powershell git rev-parse --abbrev-ref HEAD)
+GIT_D := $(shell powershell (Get-Date -UFormat %Y%m%d-%T))
+
 DEFINES     := -D__IMXRT1062__ -DTEENSYDUINO=153 -DARDUINO_TEENSY41 -DARDUINO=10807
 DEFINES     += -DF_CPU=600000000 -DUSB_SERIAL -DLAYOUT_US_ENGLISH
+DEFINES     += -DGIT_BRANCH=\"$(GIT_B)\" -DGIT_DATE=\"$(GIT_D)\" -DGIT_V=\"$(GIT_V)\" -DGIT_V2=\"$(GIT_V2)\"
 
 CPP_FLAGS   := $(FLAGS_CPU) $(FLAGS_OPT) $(FLAGS_COM) $(DEFINES) $(FLAGS_CPP)
 C_FLAGS     := $(FLAGS_CPU) $(FLAGS_OPT) $(FLAGS_COM) $(DEFINES) $(FLAGS_C)
@@ -170,6 +179,17 @@ uploadCLI: all
 
 uploadJLink: all
 	@$(UPL_JLINK)
+
+src/Version.cpp:
+	@rm -f $@
+	@echo '#include "Version.h"' > $@
+	@echo 'const char *VERSION_DATA[] =' >> $@
+	@echo '{' >> $@
+	@echo '"Revision : $(GIT_V)",' >> $@
+	@echo '"Branch   : $(GIT_B)",' >> $@
+	@echo '"Date     : $(GIT_D)"' >> $@
+	@echo '"" // End of array marker.' >> $@
+	@echo '};' >> $@
 
 # Core library ----------------------------------------------------------------
 $(CORE_BIN)/%.o: $(CORE_SRC)/%.S

@@ -476,6 +476,12 @@ void setup()
   BM.begin(BMCLK, BMSOL, BMQH);
   BM.onChangeConnect(HandleButtonChange);
 
+#ifdef GIT_BRANCH
+  AddLineToCommandTerminal(GIT_BRANCH);
+  AddLineToCommandTerminal(GIT_DATE);
+  AddLineToCommandTerminal(GIT_V);
+#endif
+
 #ifdef USE_GDB
    halt();
 #endif
@@ -791,8 +797,8 @@ float GetMachinePosition(char axis)
 float LimitTravelRequest(float s, char XYZ)
 {
    // If the machine has been homed then protect the travel, else
-   // allow any input to allow motion after unlocking GRBL after
-   // and alarm state.
+   // allow any input to allow motion after unlocking GRBL following
+   // an alarm state.
 
    // Available travel distance within limits.
    if(grblState.isHomed == true)
@@ -800,16 +806,48 @@ float LimitTravelRequest(float s, char XYZ)
       //char buf[20] = { '\0' };
       //char *x = "1";
       uint8_t a(XYZ == 'X' ? 0 : XYZ == 'Y' ? 1 : 2);
-      if(s > 0 && (grblState.cmdTravel[a] + s) > grblState.axisMaxTravel[a])
-      {
-         s = grblState.state == eIdle ? grblState.axisMaxTravel[a] - grblState.cmdTravel[a] : 0;
-         //x = "2";
-      }
-      else if(s < 0 && (grblState.cmdTravel[a] + s) < 0)
-      {
-         s = grblState.state == eIdle ? grblState.cmdTravel[a] : 0;
-         //x = "3";
-      }
+
+      // TODO: Currently assumes that the machine is working in negative machine coordinate space, as
+      // the convention requires. Eventually add support for positive space by looking at Grbl's state
+      // from the OPT string (see note in ParseBuildOptions()).
+      // if(negative space)
+      //{
+         if(s > 0)// && (grblState.cmdTravel[a] + s) > 0)
+         {
+            if((a == 0 || a == 1) && (grblState.cmdTravel[a] + s) > 0)
+            {
+               // On the X-Carve, X and Y don't have limit switches at the
+               // 0,0 machine position when operating in negative space.
+               s = grblState.state == eIdle ? 0 - grblState.cmdTravel[a] : 0;
+            }
+            else if((grblState.cmdTravel[a] + s) > grblState.zAxisTopLimit)
+            {
+               // On the X-Carve the Z axis max travel to the top is where the pull-off position
+               // lies after the homing cycle completes. Letting it go to 0 will trigger the
+               // limit switch.
+               s = grblState.state == eIdle ? grblState.zAxisTopLimit - grblState.cmdTravel[a] : 0;
+            }
+            //x = "2";
+         }
+         else if(s < 0 && (grblState.cmdTravel[a] + s) < -grblState.axisMaxTravel[a])
+         {
+            s = grblState.state == eIdle ? -grblState.axisMaxTravel[a] - grblState.cmdTravel[a] : 0;
+            //x = "3";
+         }
+      //}
+      //else
+      //{
+         // Positive space...
+         //if(s > 0 && (grblState.cmdTravel[a] + s) > grblState.axisMaxTravel[a])
+         //    s = grblState.state == eIdle ? grblState.axisMaxTravel[a] - grblState.cmdTravel[a] : 0;
+         //    //x = "2";
+         // }
+         // else if(s < 0 && (grblState.cmdTravel[a] + s) < 0)
+         // {
+         //    s = grblState.state == eIdle ? grblState.cmdTravel[a] : 0;
+         //    //x = "3";
+         // }
+      //}
 
       // Track the amount of distance travel requested
       grblState.cmdTravel[a] += s;
@@ -1424,7 +1462,7 @@ void ParseGCodeParameters(char *line)
 }
 
 void ParseBuildOptions(char *line)
-{
+{  // Build options are requested with $I
    // [VER:1.1h.20190830:TEST]
    // [OPT:V,15,128]
    char *ch(strtok(line, ":"));
@@ -1437,6 +1475,9 @@ void ParseBuildOptions(char *line)
    {
       // Skip the build options.
       ch = strtok(NULL, ",");
+      // TODO: Extract the build options and find configuration settings such as:
+      // 1- If 'Z' is present, then HOMING_FORCE_SET_ORIGIN is set and machine operates in positive space (this is not the convention default, conventions is to operate in negative space).
+      // 2- If 'V' is present, then VARIABLE_SPINDLE support is available.
       // Planner block count
       ch = strtok(NULL, ",");
       grblState.plannerBlockCount = atoi(ch);
@@ -1725,10 +1766,20 @@ void UpdateStatusDisplay()
          if(grblState.state == eHome)
          {
             // Just finished a successful homing cycle, reset the
-            // distance tracker to the WCO.
-            grblState.cmdTravel[0] = grblState.WCO[0];
-            grblState.cmdTravel[1] = grblState.WCO[1];
-            grblState.cmdTravel[2] = grblState.WCO[2];
+            // distance tracker to the current machine position.
+            grblState.cmdTravel[0] = GetMachinePosition('X'); //grblState.WCO[0];
+            grblState.cmdTravel[1] = GetMachinePosition('Y');//grblState.WCO[1];
+            grblState.cmdTravel[2] = GetMachinePosition('Z');//grblState.WCO[2];
+            //if(negative space)
+            //{
+               //// If operating in negative space, then the max travel is
+               //// redefined as the absolute value of the machine position at the pull-off point.
+               grblState.axisMaxTravel[0] = fabs(GetMachinePosition('X'));
+               grblState.axisMaxTravel[1] = fabs(GetMachinePosition('Y'));
+               // Except for Z (on the X-Carve) since the limit switch is at the
+               // machine origin instead of the machine limit.
+               grblState.axisMaxTravel[2] = fabs(grblState.axisMaxTravel[2]);
+            //}
          }
          grblState.state = eIdle;
          tft.setTextColor(ILI9488_BLACK, ILI9488_YELLOW);

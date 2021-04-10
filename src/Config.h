@@ -133,6 +133,7 @@ typedef struct
    float axisMaxRate[3] = { 1000.f, 1000.f, 500.f };
    float axisMaxAccel[3] = { 50.f, 50.f, 50.f };
    float axisMaxTravel[3] = { 500.f, 500.f, 100.f };
+   float zAxisTopLimit = -2.0; // The pull-off position after homing. TODO: Find an automated way to set this value from the firmware.
    bool laserMode = false;
    float maxSpindleSpeed = 0.f;
 
