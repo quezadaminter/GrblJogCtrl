@@ -485,238 +485,258 @@ void setup()
 
 void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::ButtonStateType state)
 {
-   if(state == ButtonMatrix::ePressed)
+   if(grblState.state == eRun)
    {
-      //Serial.print(", P: ");Serial.print(button);Serial.print(", ");Serial.println(state);
-      switch(button)
+      // If Grbl is running, only respond to the
+      // buttons listed here.
+      if(state == ButtonMatrix::eReleased)
       {
-         case(BTN_SHIFT):
-            btnShiftPressed = true;
-            break;
+         switch(button)
+         {
+            case(BTN_FEEDHOLD):
+               SendToGrbl(GRBL_FEEDHOLD);
+               break;
 
-         case(BTN_FEEDHOLD):
-            break;
-
-         case(BTN_CYCLE_START_RESUME):
-            break;
-
-         default:
-            if(Sel1Pos.k() == SYSTEM)
-            {
-               // System Mode
-               switch(button)
-               {
-                  default:
-                     break;
-               }
-            }
-            else
-            {
-               if(Sel2Pos.k() == F1)
-               {
-                  // F1 mode
-                  switch(button)
-                  {
-                     default:
-                        break;
-                  }
-               }
-               else if(Sel2Pos.k() == F2)
-               {
-                  // F2 Mode
-                  switch(button)
-                  {
-                     default:
-                        break;
-                  }
-               }
-               else
-               {
-                  // Default mode
-                  switch(button)
-                  {
-                     default:
-                        break;
-                  }
-               }
-            }
-
-            break;
+            case(BTN_CYCLE_START_RESUME):
+               SendToGrbl(GRBL_CYCLESTARTRESUME);
+               break;
+            default:
+               break;
+         }
       }
    }
-   else if(state == ButtonMatrix::eReleased)
+   else
    {
-      switch(button)
+      if(state == ButtonMatrix::ePressed)
       {
-         case(BTN_SHIFT):
-            btnShiftPressed = false;
-            break;
+         //Serial.print(", P: ");Serial.print(button);Serial.print(", ");Serial.println(state);
+         switch(button)
+         {
+            case(BTN_SHIFT):
+               btnShiftPressed = true;
+               break;
 
-         case(BTN_FEEDHOLD):
-            SendToGrbl(GRBL_FEEDHOLD);
-            break;
+            case(BTN_FEEDHOLD):
+               break;
 
-         case(BTN_CYCLE_START_RESUME):
-            SendToGrbl(GRBL_CYCLESTARTRESUME);
-            break;
+            case(BTN_CYCLE_START_RESUME):
+               break;
 
-         default:
-            if(Sel1Pos.k() == SYSTEM)
-            {
-               // System mode
-               switch(button)
+            default:
+               if(Sel1Pos.k() == SYSTEM)
                {
-                  case(BTN_HOME):
-                     SendToGrbl(GRBL_HOMING);
-                     break;
-                  case(BTN_UNLOCK):
-                     if(grblState.state == eIdle || grblState.state == eAlarm)
-                     {
-                        SendToGrbl(GRBL_UNLOCK);
-                     }
-                     break;
-                  case(BTN_SOFTRESET):
-                     SendToGrbl(GRBL_SOFTRESET);
-                     break;
-                  case(BTN_SLEEP):
-                     SendToGrbl(GRBL_SLEEP);
-                     break;
-                  case(BTN_FORCE_RESYNC):
-                     RequestGrblStateUpdate(ALLREQ);
-                     break;
-                  case(BTN_TOGGLE_LASER_TEST_MODE):
-                     if(grblState.laserMode == true)
-                     {
-                        if(grblState.spindleState == esM5)
-                        {
-                           SendToGrbl(GRBL_LASER_TESTMODE_ON);
-                        }
-                        else
-                        {
-                           SendToGrbl(GRBL_LASER_TESTMODE_OFF);
-                        }
-                     }
-                     break;
-                  default:
-                     break;
-               }
-            }
-            else
-            {
-               if(Sel2Pos.k() == F1)
-               {
-                  // F1 Mode
+                  // System Mode
                   switch(button)
                   {
-                     case(BTN_ProbeX):
-                     // For the probe commands, it would be nice to let
-                     // the user pick the direction of travel before probing,
-                     // the distance to probe and the offset to set the
-                     // position to.
-                        controllerState = CONTROLLER_PROBEX;
-                        SendToGrbl(GRBL_PROBE_X);
-                        SendToGrbl(GRBL_SET_X_ZERO);
-                        break;
-                     case(BTN_ProbeY):
-                        controllerState = CONTROLLER_PROBEY;
-                        SendToGrbl(GRBL_PROBE_Y);
-                        SendToGrbl(GRBL_SET_Y_ZERO);
-                        break;
-                     case(BTN_ProbeZ):
-                        controllerState = CONTROLLER_PROBEZ;
-                        SendToGrbl(GRBL_PROBE_Z);
-                        SendToGrbl(GRBL_SET_Z_ZERO);
-                        break;
-
-                     case(BTN_G54):
-                        SendToGrbl("G54");
-                        break;
-                     case(BTN_G55):
-                        SendToGrbl("G55");
-                        break;
-                     case(BTN_G56):
-                        SendToGrbl("G56");
-                        break;
-                     case(BTN_G57):
-                        SendToGrbl("G57");
-                        break;
-                     case(BTN_G58):
-                        SendToGrbl("G58");
-                        break;
-                     case(BTN_G59):
-                        SendToGrbl("G59");
-                        break;
-
                      default:
                         break;
                   }
-               }
-               else if(Sel2Pos.k() == F2)
-               {
-                  // F2 Mode
                }
                else
                {
-                  // Default Mode
+                  if(Sel2Pos.k() == F1)
+                  {
+                     // F1 mode
+                     switch(button)
+                     {
+                        default:
+                           break;
+                     }
+                  }
+                  else if(Sel2Pos.k() == F2)
+                  {
+                     // F2 Mode
+                     switch(button)
+                     {
+                        default:
+                           break;
+                     }
+                  }
+                  else
+                  {
+                     // Default mode
+                     switch(button)
+                     {
+                        default:
+                           break;
+                     }
+                  }
+               }
+
+               break;
+         }
+      }
+      else if(state == ButtonMatrix::eReleased)
+      {
+         switch(button)
+         {
+            case(BTN_SHIFT):
+               btnShiftPressed = false;
+               break;
+
+            case(BTN_FEEDHOLD):
+               SendToGrbl(GRBL_FEEDHOLD);
+               break;
+
+            case(BTN_CYCLE_START_RESUME):
+               SendToGrbl(GRBL_CYCLESTARTRESUME);
+               break;
+
+            default:
+               if(Sel1Pos.k() == SYSTEM)
+               {
+                  // System mode
                   switch(button)
-                  {            
-                     case(BTN_SetX0):
-                        SendToGrbl(GRBL_SET_X_ZERO);
+                  {
+                     case(BTN_HOME):
+                        SendToGrbl(GRBL_HOMING);
                         break;
-                     case(BTN_SetY0):
-                        SendToGrbl(GRBL_SET_Y_ZERO);
-                        break;
-                     case(BTN_SetZ0):
-                        SendToGrbl(GRBL_SET_Z_ZERO);
-                        break;
-
-                     case(BTN_GotoX0):
-                        SendToGrbl(GRBL_JOG_TO_X0);
-                        break;
-                     case(BTN_GotoY0):
-                        SendToGrbl(GRBL_JOG_TO_Y0);
-                        break;
-                     case(BTN_GotoZ0):
-                        SendToGrbl(GRBL_JOG_TO_Z0);
-                        break;
-                     case(BTN_GotoX0Y0):
-                        SendToGrbl(GRBL_JOG_TO_X0Y0);
-                        break;
-
-                     case(BTN_M3M5):
-                        if(grblState.spindleState == esM5)
+                     case(BTN_UNLOCK):
+                        if(grblState.state == eIdle || grblState.state == eAlarm)
                         {
-                           SendToGrbl("M3");
-                        }
-                        else
-                        {
-                           SendToGrbl("M5");
+                           SendToGrbl(GRBL_UNLOCK);
                         }
                         break;
-
-                     case(BTN_LaserMode):
-                        // Toggle laser mode
-                        SendToGrbl("G4P0");
-                        if(grblState.laserMode == false)
+                     case(BTN_SOFTRESET):
+                        SendToGrbl(GRBL_SOFTRESET);
+                        break;
+                     case(BTN_SLEEP):
+                        SendToGrbl(GRBL_SLEEP);
+                        break;
+                     case(BTN_FORCE_RESYNC):
+                        RequestGrblStateUpdate(ALLREQ);
+                        break;
+                     case(BTN_TOGGLE_LASER_TEST_MODE):
+                        if(grblState.laserMode == true)
                         {
-                           SendToGrbl(GRBL_LASER_MODE_ON);
+                           if(grblState.spindleState == esM5)
+                           {
+                              SendToGrbl(GRBL_LASER_TESTMODE_ON);
+                           }
+                           else
+                           {
+                              SendToGrbl(GRBL_LASER_TESTMODE_OFF);
+                           }
                         }
-                        else
-                        {
-                           SendToGrbl(GRBL_LASER_MODE_OFF);
-                        }
-
-                        RequestGrblStateUpdate(EEREQ);
                         break;
                      default:
                         break;
                   }
                }
-               
-               
-            }
+               else
+               {
+                  if(Sel2Pos.k() == F1)
+                  {
+                     // F1 Mode
+                     switch(button)
+                     {
+                        case(BTN_ProbeX):
+                        // For the probe commands, it would be nice to let
+                        // the user pick the direction of travel before probing,
+                        // the distance to probe and the offset to set the
+                        // position to.
+                           controllerState = CONTROLLER_PROBEX;
+                           SendToGrbl(GRBL_PROBE_X);
+                           SendToGrbl(GRBL_SET_X_ZERO);
+                           break;
+                        case(BTN_ProbeY):
+                           controllerState = CONTROLLER_PROBEY;
+                           SendToGrbl(GRBL_PROBE_Y);
+                           SendToGrbl(GRBL_SET_Y_ZERO);
+                           break;
+                        case(BTN_ProbeZ):
+                           controllerState = CONTROLLER_PROBEZ;
+                           SendToGrbl(GRBL_PROBE_Z);
+                           SendToGrbl(GRBL_SET_Z_ZERO);
+                           break;
 
-            break;
+                        case(BTN_G54):
+                           SendToGrbl("G54");
+                           break;
+                        case(BTN_G55):
+                           SendToGrbl("G55");
+                           break;
+                        case(BTN_G56):
+                           SendToGrbl("G56");
+                           break;
+                        case(BTN_G57):
+                           SendToGrbl("G57");
+                           break;
+                        case(BTN_G58):
+                           SendToGrbl("G58");
+                           break;
+                        case(BTN_G59):
+                           SendToGrbl("G59");
+                           break;
+
+                        default:
+                           break;
+                     }
+                  }
+                  else if(Sel2Pos.k() == F2)
+                  {
+                     // F2 Mode
+                  }
+                  else
+                  {
+                     // Default Mode
+                     switch(button)
+                     {            
+                        case(BTN_SetX0):
+                           SendToGrbl(GRBL_SET_X_ZERO);
+                           break;
+                        case(BTN_SetY0):
+                           SendToGrbl(GRBL_SET_Y_ZERO);
+                           break;
+                        case(BTN_SetZ0):
+                           SendToGrbl(GRBL_SET_Z_ZERO);
+                           break;
+
+                        case(BTN_GotoX0):
+                           SendToGrbl(GRBL_JOG_TO_X0);
+                           break;
+                        case(BTN_GotoY0):
+                           SendToGrbl(GRBL_JOG_TO_Y0);
+                           break;
+                        case(BTN_GotoZ0):
+                           SendToGrbl(GRBL_JOG_TO_Z0);
+                           break;
+                        case(BTN_GotoX0Y0):
+                           SendToGrbl(GRBL_JOG_TO_X0Y0);
+                           break;
+
+                        case(BTN_M3M5):
+                           if(grblState.spindleState == esM5)
+                           {
+                              SendToGrbl("M3");
+                           }
+                           else
+                           {
+                              SendToGrbl("M5");
+                           }
+                           break;
+
+                        case(BTN_LaserMode):
+                           // Toggle laser mode
+                           SendToGrbl("G4P0");
+                           if(grblState.laserMode == false)
+                           {
+                              SendToGrbl(GRBL_LASER_MODE_ON);
+                           }
+                           else
+                           {
+                              SendToGrbl(GRBL_LASER_MODE_OFF);
+                           }
+
+                           RequestGrblStateUpdate(EEREQ);
+                           break;
+                        default:
+                           break;
+                     }
+                  }
+               }
+               break;
+         }
       }
    }
 }
@@ -2322,14 +2342,14 @@ void loop()
      {
         RefreshScreen();
      }
-     else if(Sel1Pos.k() == SPINDLE)
+     else if(Sel1Pos.k() == SPINDLE && grblState.state != eRun)
      {
         char s[20] = { '\0' };
         sprintf(s, "S%ld", grblState.cmdSpindleSpeed);
         SendToGrbl(s);
         RequestGrblStateUpdate(GCREQ);
      }
-     else if(Sel1Pos.k() == FEEDRATE)
+     else if(Sel1Pos.k() == FEEDRATE && grblState.state != eRun)
      {
         char s[20] = { '\0' };
         sprintf(s, "F%ld", grblState.cmdFeedRate);
