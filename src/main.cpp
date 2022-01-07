@@ -730,10 +730,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                         break;
                   }
                }
-               
-               
             }
-
             break;
       }
    }
