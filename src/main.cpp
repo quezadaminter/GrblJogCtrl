@@ -1781,6 +1781,10 @@ void UpdateStatusDisplay()
                grblState.axisMaxTravel[2] = fabs(grblState.axisMaxTravel[2]);
             //}
          }
+         // Consider if this is where we need to reset the machine position reference for
+         // grblState.cmdTravel when entering the idle state from a Jog or Run state
+         // in case the position change command was not sent by the handheld but instead
+         // was sent by the g-code sender or a button matrix push to Go To 0 command for example.
          grblState.state = eIdle;
          tft.setTextColor(ILI9488_BLACK, ILI9488_YELLOW);
       }
@@ -2448,6 +2452,7 @@ void loop()
         // Stop the jog command imediately.
         userial.write(0x85);
         SendToGrbl("G4P0");
+        // Need to capture the current machine position for grblState.cmdTravel here!
      }
      else if(Sel1Pos.k() == FILES)
      {
