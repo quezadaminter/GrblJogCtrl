@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include "ILI9488_t3.h"
 
+// Colors not defined by the ILI9844_t3 library
+#define ILI9488_LIGHTGREEN 0x87FF // 150, 255, 150
+
 // Selector Switches
 #define SEL_NONE 255 // Both SW1 and SW2
 
