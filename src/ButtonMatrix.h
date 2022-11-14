@@ -21,18 +21,20 @@
 #define _bmG B01000000
 #define _bmH B10000000
 
-#define R1C1 (_bmE | _bmA)
-#define R1C2 (_bmE | _bmH)
-#define R1C3 (_bmE | _bmB)
-#define R2C1 (_bmD | _bmA)
-#define R2C2 (_bmD | _bmH)
-#define R2C3 (_bmD | _bmB)
-#define R3C1 (_bmF | _bmA)
-#define R3C2 (_bmF | _bmH)
-#define R3C3 (_bmF | _bmB)
-#define R4C1 (_bmC | _bmA)
-#define R4C2 (_bmC | _bmH)
-#define R4C3 (_bmC | _bmB)
+// Change the combination of the bits to match the layout of
+// the matrix here!
+#define R1C1 (_bmE | _bmB)
+#define R1C2 (_bmE | _bmC)
+#define R1C3 (_bmE | _bmD)
+#define R2C1 (_bmF | _bmB)
+#define R2C2 (_bmF | _bmC)
+#define R2C3 (_bmF | _bmD)
+#define R3C1 (_bmG | _bmB)
+#define R3C2 (_bmG | _bmC)
+#define R3C3 (_bmG | _bmD)
+#define R4C1 (_bmH | _bmB)
+#define R4C2 (_bmH | _bmC)
+#define R4C3 (_bmH | _bmD)
 
 // Button bitmasks
 #define R1C1bm (1 << 0)
@@ -92,7 +94,7 @@ class ButtonMatrix
 
       uint16_t _buttonStates = 0;
 
-      elapsedMillis _debounce;
+      elapsedMicros _throttle;
 
       void (*onChange)(ButtonMasksType button, ButtonStateType state);
 };

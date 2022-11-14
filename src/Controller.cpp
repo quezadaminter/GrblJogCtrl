@@ -388,7 +388,7 @@ void setup()
   pinMode(TFT_BL, OUTPUT);
   analogWrite(TFT_BL, lcdBrightness);
   tft.begin();
-  tft.setRotation(1);
+  tft.setRotation(3);
   tft.setFrameBuffer(tftFB);
   tft.useFrameBuffer(true);
   memset(terminal, '\0', sizeof(terminal[0][0]) * tROWS * tCOLS);
@@ -491,6 +491,7 @@ void setup()
 
 void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::ButtonStateType state)
 {
+   //Serial.print(button); Serial.print(":"); Serial.println(state);
    if(grblState.state == eRun)
    {
       // If Grbl is running, only respond to the
@@ -775,6 +776,7 @@ void TestSelector1()
       if(selector1Pos[s].k != SEL_NONE && digitalReadFast(selector1Pos[s].k) == LOW)
       {
          Sel1Pos.Reset(s);
+         Serial.println(Sel1Pos.val());
          break;
       }
    }
@@ -791,6 +793,7 @@ void TestSelector2()
       if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW)
       {
          Sel2Pos.Reset(s);
+         Serial.println(Sel2Pos.val());
          break;
       }
    }
@@ -1006,7 +1009,8 @@ void ProcessEncoderRotation(int8_t steps)
       if(f > 0)
       {
          s = LimitTravelRequest(s, XYZ[0]);
-         sprintf(grblJogCommand, "$J=G91F%f%s%f", f, XYZ, s);
+         sprintf(grblJogCommand, "$Q=%s%.5f", XYZ, s);
+         //sprintf(grblJogCommand, "$J=G91F%f%s%f", f, XYZ, s);
          SendToGrbl(grblJogCommand);
       }
    }

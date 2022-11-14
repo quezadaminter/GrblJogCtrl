@@ -2,6 +2,28 @@
 
 ButtonMatrix BM;
 
+void printBits(uint8_t v, bool ln = false)
+{
+   uint8_t mask(B10000000);
+   Serial.print("B");
+   for(uint8_t i = 0; i < 8; ++i)
+   {
+      if(mask & v)
+      {
+         Serial.print("1");
+      }
+      else
+      {
+         Serial.print("0");
+      }
+      mask = (mask >> 1);
+   }
+   if(ln == true)
+   {
+      Serial.println();
+   }
+}
+
 ButtonMatrix::ButtonMatrix()
 {
    _buttons[eR1C1] = R1C1;
@@ -39,6 +61,11 @@ void ButtonMatrix::begin(uint8_t clk, uint8_t shiftLoad, uint8_t QH, uint8_t nQH
    {
       pinMode(clkInh, OUTPUT);
    }
+   
+   // Enable the parallel inputs.
+   digitalWriteFast(_SOL, LOW);
+
+   _throttle = 0;
 }
 
 void ButtonMatrix::onChangeConnect(void(*func)(ButtonMasksType button, ButtonStateType state))
@@ -48,61 +75,76 @@ void ButtonMatrix::onChangeConnect(void(*func)(ButtonMasksType button, ButtonSta
 
 uint8_t ButtonMatrix::Update()
 {
-   // Latch the parallel inputs
-   if(_clkInh != 255)
+   // The SN74HC165 cannot run too fast or else the readings are
+   // unreliable. Throttle to execute with some space between readings
+   // to keep it happy.
+   if(_throttle >= 200)
    {
-      digitalWriteFast(_clkInh, HIGH);
-   }
-   digitalWriteFast(_SOL, LOW);
-   delayNanoseconds(200);
-   digitalWriteFast(_SOL, HIGH);
-   if(_clkInh != 255)
-   {
-      digitalWriteFast(_clkInh, LOW);
-   }
-
-   // Clock the values
-   uint8_t data(0);
-   for(uint8_t i = 0; i < 8; ++i)
-   {
-      data = (data << 1);
-      data |= digitalReadFast(_QH);
-
-      digitalWriteFast(_clk, HIGH);
-      delayNanoseconds(200);
-      digitalWriteFast(_clk, LOW);
-      delayNanoseconds(200);
-   }
-
-   // If the callback is available sort out
-   // the button states.
-   if(onChange != nullptr)
-   {
-      uint8_t change(_data ^ data);
-      if(change != 0 && _read == false)
+      // Latch the parallel inputs
+      if(_clkInh != 255)
       {
-         _change = change;
-         _debounce = 0;
-         _read = true;
-         //Serial.print("Ch: ");Serial.print(millis());
+         digitalWriteFast(_clkInh, HIGH);
       }
-      else if(_read == true && _debounce >= 180)
+      // Disable the parallel inputs and shift the values into the serial register.
+      digitalWriteFast(_SOL, HIGH);
+      if(_clkInh != 255)
       {
-         //Serial.print(", Ap: ");Serial.print(millis());
+         digitalWriteFast(_clkInh, LOW);
+      }
+
+      // Clock the values
+      uint8_t data(0);
+      for(uint8_t i = 0; i < 8; ++i)
+      {
+         data = (data << 1);
+         data |= digitalReadFast(_QH);
+
+         // The TI SN74HC165 clocks on the low to high transition.
+         digitalWriteFast(_clk, LOW);
+         // Take a small pause between clock pulses to keep the
+         // SN74HC165 happy.
+         delayNanoseconds(200);
+         digitalWriteFast(_clk, HIGH);
+         // Wait again a bit for next clock pulse.
+         delayNanoseconds(200);
+      }
+      // Enable the parallel inputs.
+      digitalWriteFast(_SOL, LOW);
+
+      // Data has been moved from the shift register to the local variable.
+      // Do something with it.
+
+      // If the callback is available sort out
+      // the button states.
+      if(onChange != nullptr)
+      {
+         // If the input changed between now and the last frame...
+         _change = (_data ^ data);
          if(_change != 0)
          {
+            // ... loop through the buttons and find the one that has the matching pattern
+            // for a row and column definition.
+            //printBits(_change, true);
             for(uint8_t i = 0; i < eBMRange; ++i)
             {
                if((_change & _buttons[i]) == _buttons[i])
                {
+                  // Call the callback on the button that matches the change pattern.
                   onChange((ButtonMasksType)i, ((data & _buttons[i]) == _buttons[i] ? ePressed : eReleased));
                }
             }
-            _change = 0;
+            _throttle = 0;
          }
-         _read = false;
+         else
+         {
+            _throttle = 0;
+         }
       }
+      else
+      {
+         _throttle = 0;
+      }
+      _data = data;
    }
-   _data = data;
    return(_data);
 }
