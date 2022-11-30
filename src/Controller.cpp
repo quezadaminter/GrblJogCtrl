@@ -66,6 +66,17 @@ uint8_t multiplierSet = 1;
 bool jogMode = false;
 void TestSelector1();
 void TestSelector2();
+void HandleSelector2Jog(bool selected);
+void HandleSelector2XP1(bool selected);
+
+void Selector2JogChangeInterrupt();
+void Selector2XP1ChangeInterrupt();
+
+SelectorInput Sel2[] =
+{
+   { JOG, "JOG", HandleSelector2Jog },
+   { XP1, "0.1X", HandleSelector2XP1 }
+};
 
 // Button Matrix
 #define BMSOL 20
@@ -122,8 +133,8 @@ bool btnShiftPressed = false;
 //////////////////////////////////////////////////////////////
 
 // Encoder
-#define ENC_A 15
-#define ENC_B 16
+#define ENC_A 16
+#define ENC_B 15
 #define ENC_SW 17
 void EncoderInterrupt();
 uint16_t JOG_MIN_SPEED = 1000; // mm/min (Don't make it too slow).
@@ -380,6 +391,15 @@ void AddLineToCommandTerminal(const char *line)
    }
 }
 
+void AddLineToCommandTerminal(const char *line, bool update)
+{
+   AddLineToCommandTerminal(line);
+   if(update == true)
+   {
+      UpdateCommandTerminal();
+   }
+}
+
 
 
 void setup()
@@ -443,14 +463,20 @@ void setup()
    attachInterrupt(digitalPinToInterrupt(LCDBRT), TestSelector1, CHANGE);
    attachInterrupt(digitalPinToInterrupt(FILES), TestSelector1, CHANGE);
 
-   attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X1), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X10), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(X100), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(F1), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(F2), TestSelector2, CHANGE);
    attachInterrupt(digitalPinToInterrupt(DEBUG), TestSelector2, CHANGE);
+   
+   //attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2Jog, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2XP1, CHANGE);
+
+   Sel2[0].begin(Selector2JogChangeInterrupt);
+   Sel2[1].begin(Selector2XP1ChangeInterrupt);
 
    for(uint8_t s = 0; s < 12; ++s)
    {
@@ -491,7 +517,6 @@ void setup()
 
 void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::ButtonStateType state)
 {
-   //Serial.print(button); Serial.print(":"); Serial.println(state);
    if(grblState.state == eRun)
    {
       // If Grbl is running, only respond to the
@@ -514,9 +539,16 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
    }
    else
    {
-      if(state == ButtonMatrix::ePressed)
+      if(Sel1Pos.k() == SEL_NONE && Sel2Pos.k() == SEL_NONE)
       {
-         //Serial.print(", P: ");Serial.print(button);Serial.print(", ");Serial.println(state);
+         uint8_t r = (button / 3) + 1;
+         uint8_t c = (button % 3) + 1;
+         char buf[20] = { '\0' };
+         sprintf(buf, "R %d C %d S %s", r, c, state == ButtonMatrix::ButtonStateType::ePressed ? "P" : "R");
+         AddLineToCommandTerminal(buf, true);
+      }
+      else if(state == ButtonMatrix::ePressed)
+      {
          switch(button)
          {
             case(BTN_SHIFT):
@@ -756,7 +788,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                      }
                   }
                }
-               break;
+            break;
          }
       }
    }
@@ -784,21 +816,60 @@ void TestSelector1()
    Sel1Pos.Debounce = millis();
 }
 
+void Selector2JogChangeInterrupt()
+{
+   Sel2[0].Test(Sel2[0], millis());
+}
+
+void Selector2XP1ChangeInterrupt()
+{
+   Sel2[1].Test(Sel2[1], millis());
+}
+
+void HandleSelector2Jog(bool selected)
+{
+      if(selected == true)
+      {
+         // Selected
+         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("JOGS");
+      }
+      else
+      {
+         // De-selected
+         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("JOGD");
+      }
+}
+
+void HandleSelector2XP1(bool selected)
+{
+      if(selected == true)
+      {
+         // Selected
+         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("XP1S");
+      }
+      else
+      {
+         // De-selected
+         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("XP1D");
+      }
+}
+
 void TestSelector2()
 {
    Sel2Pos.Reset(emptySel.k);
    Sel2Pos.Interrupt = true;
    for(uint8_t s = 0; s < 12; ++s)
    {
-      if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW)
+      if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW &&
+         millis() - Sel2Pos.Debounce > 10)
       {
+   Sel2Pos.Debounce = millis();
          Sel2Pos.Reset(s);
-         Serial.println(Sel2Pos.val());
+         Serial.print(millis() - Sel2Pos.Debounce); Serial.println(Sel2Pos.val());
          break;
       }
    }
    // Reset debounce timer
-   Sel2Pos.Debounce = millis();
 }
 
 float GetMachinePosition(char axis)
@@ -980,30 +1051,22 @@ void ProcessEncoderRotation(int8_t steps)
       {
          s = 0.1 * dir;
          f = 1000.0;
-         //sprintf(grblJogCommand, "$J=G91F1000%s%.3f", XYZ, 0.1 * dir);
-         //SendToGrbl(grblJogCommand);
       }
       else if(Sel2Pos.k() == X1)
       {
          s = dir;
          f = 1000.0;
-         //sprintf(grblJogCommand, "$J=G91F1000%s%d", XYZ, dir);
-         //SendToGrbl(grblJogCommand);
       }
       else if(Sel2Pos.k() == X10)
       {
          s = 10 * dir;
          f = 3000.0;
-         //sprintf(grblJogCommand, "$J=G91F3000%s%d", XYZ, 10 * dir);
-         //SendToGrbl(grblJogCommand);
       }
-      else if(Sel2Pos.k() == X100 && Sel1Pos.k() != AXIS_Z)// _EncSteps != 0)
+      else if(Sel2Pos.k() == X100 && Sel1Pos.k() != AXIS_Z)
       {
          // 100 is too big for the Z axis. Allow this only for X and Y.
          s = 100 * dir;
          f = 5000.0;
-         //sprintf(grblJogCommand, "$J=G91F5000%s%d", XYZ, 100 * dir);
-         //SendToGrbl(grblJogCommand);
       }
 
       if(f > 0)
@@ -1013,6 +1076,12 @@ void ProcessEncoderRotation(int8_t steps)
          //sprintf(grblJogCommand, "$J=G91F%f%s%f", f, XYZ, s);
          SendToGrbl(grblJogCommand);
       }
+   }
+   else if(Sel1Pos.k() == SEL_NONE && Sel1Pos.k() == SEL_NONE && steps != 0)
+   {
+      char buf[20] = { '\0' };
+      sprintf(buf, "STEPS: %d", steps);
+      AddLineToCommandTerminal(buf, true);
    }
    else if(Sel1Pos.k() == SPINDLE && steps != 0 && grblState.maxSpindleSpeed != 0 &&
            (Sel2Pos.k() == X1 || Sel2Pos.k() == X10 || Sel2Pos.k() == X100))

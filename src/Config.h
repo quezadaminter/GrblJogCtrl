@@ -5,70 +5,10 @@
 
 #include <stdint.h>
 #include "ILI9488_t3.h"
+#include "Selector.h"
 
 // Colors not defined by the ILI9844_t3 library
 #define ILI9488_LIGHTGREEN 0x87FF // 150, 255, 150
-
-// Selector Switches
-#define SEL_NONE 255 // Both SW1 and SW2
-
-class uintCharStruct
-{
-   public:
-      uintCharStruct()
-      {
-         k = SEL_NONE;
-         val = "NONE";
-      }
-      uintCharStruct(uint8_t K, const char *V)
-      {
-         k = K;
-         val = V;
-      }
-
-      uint8_t k;
-      const char *val;
-};
-
-class SelectorT
-{
-   public:
-      SelectorT(volatile uintCharStruct *init){ now = init; }
-      uint8_t k() volatile { return(now->k); }
-      const char *val() volatile { return(now->val); }
-      uint8_t p() volatile { return(prev); }
-      void Reset(uint8_t pos) volatile { Position = pos; }
-      void Now(volatile uintCharStruct *n) volatile
-      { prev = now->k; now = n; Interrupt = false; changeInFrame = true; Position = SEL_NONE; }
-      bool ChangeInFrame() volatile { return(changeInFrame); }
-      void ResetChangeInFrame() volatile { changeInFrame = false; }
-      volatile uint32_t Debounce = 0;
-      volatile bool Interrupt = false;
-      volatile uint8_t Position = SEL_NONE;
-   private:
-      //static uintCharStruct emptySel;
-      volatile uintCharStruct *now = nullptr;
-      volatile uint8_t prev;
-      bool changeInFrame = false;
-};
-
-#define SYSTEM   31   // SW1.1
-#define AXIS_X   30   // SW1.2
-#define AXIS_Y   29   // SW1.3
-#define AXIS_Z   28   // SW1.4
-#define SPINDLE  27   // SW1.5
-#define FEEDRATE 26   // SW1.6
-#define LCDBRT   25   // SW1.7
-#define FILES    24   // SW1.8
-
-#define JOG    34     // SW2.1
-#define XP1    35     // SW2.2
-#define X1     36     // SW2.3
-#define X10    37     // SW2.4
-#define X100   38     // SW2.5
-#define F1     39     // SW2.6
-#define F2     40     // SW2.7
-#define DEBUG  41     // SW2.8
 
 // Display
 #define tROWS 33 //40
