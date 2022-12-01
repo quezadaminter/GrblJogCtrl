@@ -3,78 +3,43 @@
 
 #define SEL_NONE 255 // Both SW1 and SW2
 
-class uintCharStruct
-{
-   public:
-      uintCharStruct()
-      {
-         k = SEL_NONE;
-         val = "NONE";
-      }
-      uintCharStruct(uint8_t K, const char *V)
-      {
-         k = K;
-         val = V;
-      }
-
-      uint8_t k;
-      const char *val;
-};
-
+// Represents each of the pins on the selector.
 class SelectorInput
 {
    public:
-      SelectorInput(uint8_t PIN, const char *LABEL, void(*selected)(bool)) :
-        pin(PIN), label(LABEL), onSelected(selected)
-      { 
-      }
-      void begin(void(*change)())
-      {
-         if(pin != SEL_NONE && change != nullptr)
-         {
-            onChange = change;
-            attachInterrupt(digitalPinToInterrupt(pin), onChange, CHANGE);
-         }
-      }
-      static void Test(SelectorInput &si, uint32_t now)
-      {
-         if(now - si.debounce > 10)
-         {
-            si.debounce = now;
-            if(si.onSelected != nullptr)
-            {
-               si.onSelected(digitalReadFast(si.pin) == LOW);
-            }
-         }
-      }
+      enum StateT { eNone, eSelected, eNotSelected };
+
+      SelectorInput(uint8_t PIN, const char *LABEL, void(*change)());
+      void begin();
+      static StateT Test(SelectorInput &si, uint32_t now);
 
       uint8_t pin = SEL_NONE;
       const char *label;
       uint32_t debounce = 0;
       void (*onChange)() = nullptr;
-      void (*onSelected)(bool) = nullptr;
 };
 
+// Represents the switch itself.
 class SelectorT
 {
    public:
-      SelectorT(volatile uintCharStruct *init){ now = init; }
-      uint8_t k() volatile { return(now->k); }
-      const char *val() volatile { return(now->val); }
-      uint8_t p() volatile { return(prev); }
-      void Reset(uint8_t pos) volatile { Position = pos; }
-      void Now(volatile uintCharStruct *n) volatile
-      { prev = now->k; now = n; Interrupt = false; changeInFrame = true; Position = SEL_NONE; }
-      bool ChangeInFrame() volatile { return(changeInFrame); }
-      void ResetChangeInFrame() volatile { changeInFrame = false; }
-      volatile uint32_t Debounce = 0;
-      volatile bool Interrupt = false;
-      volatile uint8_t Position = SEL_NONE;
-   private:
-      //static uintCharStruct emptySel;
-      volatile uintCharStruct *now = nullptr;
-      volatile uint8_t prev;
-      bool changeInFrame = false;
+      SelectorT(SelectorInput *empty);
+      void Arm(SelectorInput &si);
+      /**
+       * @brief Shifts the armed value to the active value.
+       * 
+       */
+      void Update();
+      volatile SelectorInput *Active();
+      uint8_t Is();
+      bool Is(uint8_t pin);
+      uint8_t Was();
+      bool hasChange();
+
+      volatile SelectorInput *active = nullptr;
+      volatile SelectorInput *armed = nullptr;
+      volatile SelectorInput *was = nullptr;
+      bool change = false;
 };
 
 #define SYSTEM   31   // SW1.1

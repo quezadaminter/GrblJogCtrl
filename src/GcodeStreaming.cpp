@@ -506,14 +506,14 @@ void Streamer::Select(int8_t steps)
    }
 }
 
-void Streamer::HandleSelectorStateChange(uint8_t now, uint8_t was)
+void Streamer::HandleSelectorStateChange(bool selected)
 {
-   if(now == FILES)
+   if(selected == true)
    {
       // Switched into files mode.
       streamerState = LIST;
    }
-   else if(was == FILES)
+   else
    {
       // Switched out of files mode.
       ClearFilesTerminal();

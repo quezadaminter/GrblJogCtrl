@@ -6,6 +6,14 @@
 #include <stdint.h>
 #include "ILI9488_t3.h"
 #include "Selector.h"
+#include "GRBL.h"
+
+// Button Matrix
+extern bool btnShiftPressed;
+
+// Selectors
+extern SelectorT Selector1;
+extern SelectorT Selector2;
 
 // Colors not defined by the ILI9844_t3 library
 #define ILI9488_LIGHTGREEN 0x87FF // 150, 255, 150
@@ -15,10 +23,18 @@
 #define tCOLS 31
 #define cROWS 28
 extern ILI9488_t3 tft;
+extern uint8_t lcdBrightness;
+extern elapsedMillis displayRefresh;
+extern elapsedMillis heartBeatTimeout;
+extern elapsedMillis laserTimeout;
+extern void DrawTestPattern();
 extern void RefreshScreen();
 extern void Text(uint16_t x, uint16_t y, const char *text);
 extern void Text(uint16_t x, uint16_t y, const char *text, size_t len);
 extern void AddLineToCommandTerminal(const char *line);
+void UpdateClockDisplay();
+void UpdateSpindleDisplay();
+void UpdateFeedRateDisplay();
 
 // GRBL
 enum grblStatesT { eUnknownState, eConnected, eIdle, eRun, eHold, eJog, eAlarm, eDoor, eCheck, eHome, eSleep };
@@ -33,6 +49,12 @@ enum grblTLOModeT { etUnknown, etG3_1, et49 };
 enum grblProgramModeT { eMUnkown, eM0, eM1, eM2, eM30 };
 enum grblSpindleStateT { esUnknown, esM3, esM4, esM5 };
 enum grblCoolantStateT { eCUnknown, eCM7, eCM8, eCM9 };
+
+
+extern const char *grblStatusImage[eStatusRange];
+
+extern char *statusValues[eStatusRange];
+extern float GetMachinePosition(char axis);
 
 typedef struct
 {

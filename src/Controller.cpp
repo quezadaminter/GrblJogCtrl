@@ -44,39 +44,62 @@ USBDriver *drivers[] = {&hub1, &hub2, &hid1, &hid2, &hid3, &userial};
 const char * driver_names[CNT_DEVICES] = {"Hub1", "Hub2",  "HID1", "HID2", "HID3", "USERIAL1" };
 bool driver_active[CNT_DEVICES] = {false, false, false, false};
 
-volatile uintCharStruct selector1Pos[12] =
-{
-   { SYSTEM, "SYSTEM" }, { AXIS_X, "X AXIS" }, { AXIS_Y, "Y AXIS" }, { AXIS_Z, "Z AXIS" },
-   { SPINDLE, "SPINDLE" }, { FEEDRATE, "FEEDRATE" }, { LCDBRT, "LCD BRT" }, { FILES, "FILES" },
-   {SEL_NONE, "\0" }, { SEL_NONE, "\0" }, { SEL_NONE, "\0" }, { SEL_NONE, "\0" }
-};
-
-volatile uintCharStruct selector2Pos[12] =
-{
-   { JOG, "JOG" }, { XP1, "0.1X" }, { X1, "1X" }, { X10, "10X" },
-   { X100, "100X" }, { F1, "F1" }, { F2, "F2" }, { DEBUG, "DEBUG" },
-   { SEL_NONE, "\0" }, {SEL_NONE, "\0" }, { SEL_NONE, "\0" }, { SEL_NONE, "\0" }
-};
-volatile uintCharStruct emptySel;// = { SEL_NONE, "NONE" };
-volatile SelectorT Sel1Pos(&emptySel);
-volatile SelectorT Sel2Pos(&emptySel);
 
 bool pastEncoderSwitchPos = false;
 uint8_t multiplierSet = 1;
 bool jogMode = false;
-void TestSelector1();
-void TestSelector2();
-void HandleSelector2Jog(bool selected);
-void HandleSelector2XP1(bool selected);
+
+SelectorInput emptySelectorValue(SEL_NONE, "NONE", nullptr);
+
+void Selector1SystemChangeInterrupt();
+void Selector1XAxisChangeInterrupt();
+void Selector1YAxisChangeInterrupt();
+void Selector1ZAxisChangeInterrupt();
+void Selector1SpindleChangeInterrupt();
+void Selector1FeedrateChangeInterrupt();
+void Selector1LCDChangeInterrupt();
+void Selector1FilesChangeInterrupt();
 
 void Selector2JogChangeInterrupt();
 void Selector2XP1ChangeInterrupt();
+void Selector2X1ChangeInterrupt();
+void Selector2X10ChangeInterrupt();
+void Selector2X100ChangeInterrupt();
+void Selector2F1ChangeInterrupt();
+void Selector2F2ChangeInterrupt();
+void Selector2DebugChangeInterrupt();
 
-SelectorInput Sel2[] =
+SelectorInput Selector1Inputs[] =
 {
-   { JOG, "JOG", HandleSelector2Jog },
-   { XP1, "0.1X", HandleSelector2XP1 }
+   { SYSTEM, "SYSTEM", Selector1SystemChangeInterrupt },
+   { AXIS_X, "X AXIS", Selector1XAxisChangeInterrupt },
+   { AXIS_Y, "Y AXIS", Selector1YAxisChangeInterrupt },
+   { AXIS_Z, "Z AXIS", Selector1ZAxisChangeInterrupt },
+   { SPINDLE, "SPINDLE", Selector1SpindleChangeInterrupt },
+   { FEEDRATE, "FEEDRATE", Selector1FeedrateChangeInterrupt },
+   { LCDBRT, "LCD BRT", Selector1LCDChangeInterrupt },
+   { FILES, "FILES", Selector1FilesChangeInterrupt }
 };
+
+SelectorInput Selector2Inputs[] =
+{
+   { JOG, "JOG", Selector2JogChangeInterrupt },
+   { XP1, "0.1X", Selector2XP1ChangeInterrupt },
+   { X1, "1X", Selector2X1ChangeInterrupt },
+   { X10, "10X", Selector2X10ChangeInterrupt },
+   { X100, "100X", Selector2X100ChangeInterrupt },
+   { F1, "F1", Selector2F1ChangeInterrupt },
+   { F2, "F2", Selector2F2ChangeInterrupt },
+   { DEBUG, "DEBUG", Selector2DebugChangeInterrupt }
+};
+
+SelectorT Selector1(&emptySelectorValue);
+SelectorT Selector2(&emptySelectorValue);
+
+uint8_t Selector1Size = sizeof(Selector1Inputs) / sizeof(Selector1Inputs[0]);
+uint8_t Selector2Size = sizeof(Selector2Inputs) / sizeof(Selector2Inputs[0]);
+
+
 
 // Button Matrix
 #define BMSOL 20
@@ -163,12 +186,10 @@ char cmdTerminal[cROWS][tCOLS];
 
 void UpdateGrblTerminal();
 void UpdateCommandTerminal();
-void UpdateSpindleDisplay();
-void UpdateFeedRateDisplay();
 void UpdateSelectorStates();
 void UpdateStatusDisplay();
 void UpdateParameterDisplay();
-void UpdateLCDBrightnessIndication(bool clear = false);
+void UpdateLCDBrightnessIndication(bool selected = true);
 void Blank();
 
 // GRBL
@@ -208,39 +229,6 @@ uint8_t controllerState = CONTROLLER_NORMAL;
 #define CLRREQ(REQ, TYPE) (REQ &= (~TYPE))
 void RequestGrblStateUpdate(uint8_t type);
 void SynchronizeWithGrbl();
-
-#define GRBL_STATUS_ENUM \
-ADD_ENUM(eStatus)\
-ADD_ENUM(eRPosX)\
-ADD_ENUM(eRPosY)\
-ADD_ENUM(eRPosZ)\
-ADD_ENUM(eFeed)\
-ADD_ENUM(eSpindle)\
-ADD_ENUM(ePlanner)\
-ADD_ENUM(eRXBytes)\
-ADD_ENUM(eLineNumber)\
-ADD_ENUM(eOVFeed)\
-ADD_ENUM(eOVRapid)\
-ADD_ENUM(eOVSpindle)\
-ADD_ENUM(eWCOX)\
-ADD_ENUM(eWCOY)\
-ADD_ENUM(eWCOZ)\
-ADD_ENUM(ePins)
-
-enum grblStatusT
-{
-#define ADD_ENUM(eVal) eVal,
-   GRBL_STATUS_ENUM
-#undef ADD_ENUM
-   eStatusRange
-};
-
-const char *grblStatusImage[eStatusRange] =
-{
-#define ADD_ENUM(eVal) #eVal,
-   GRBL_STATUS_ENUM
-#undef ADD_ENUM
-};
 
 enum grblPushMsgT { eMSG, eGC, eHLP, eVER, eEcho, eOther, eG54, eG55, eG56, eG57, eG58, eG59,
                     eG28, eG30, eG92, eTLO, ePRB, ePushRange };
@@ -346,19 +334,10 @@ const char *grblSettings [] =
 "132	Z-axis maximum travel, millimeters"
 };
 
-bool CompareStrings(const char *sz1, const char *sz2) {
-  while (*sz2 != 0) {
-    if (toupper(*sz1) != toupper(*sz2)) 
-      return false;
-    sz1++;
-    sz2++;
-  }
-  return true; // end of string so show as match
-}
 
 void AddLineToGrblTerminal(const char *line)
 {
-   if(Sel2Pos.k() == DEBUG)
+   if(Selector2.Is() == DEBUG)
    {
       // Wrap long lines.
       uint8_t breaks((strlen(line) / (tCOLS - 1)) + 1);
@@ -454,41 +433,47 @@ void setup()
    pinMode(F2, INPUT_PULLUP);
    pinMode(DEBUG, INPUT_PULLUP);
 
-   attachInterrupt(digitalPinToInterrupt(SYSTEM), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(AXIS_X), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(AXIS_Y), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(AXIS_Z), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(SPINDLE), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(FEEDRATE), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(LCDBRT), TestSelector1, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(FILES), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(SYSTEM), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(AXIS_X), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(AXIS_Y), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(AXIS_Z), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(SPINDLE), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(FEEDRATE), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(LCDBRT), TestSelector1, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(FILES), TestSelector1, CHANGE);
 
    //attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2, CHANGE);
    //attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(X1), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(X10), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(X100), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(F1), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(F2), TestSelector2, CHANGE);
-   attachInterrupt(digitalPinToInterrupt(DEBUG), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(X1), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(X10), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(X100), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(F1), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(F2), TestSelector2, CHANGE);
+   //attachInterrupt(digitalPinToInterrupt(DEBUG), TestSelector2, CHANGE);
    
-   //attachInterrupt(digitalPinToInterrupt(JOG), TestSelector2Jog, CHANGE);
-   //attachInterrupt(digitalPinToInterrupt(XP1), TestSelector2XP1, CHANGE);
-
-   Sel2[0].begin(Selector2JogChangeInterrupt);
-   Sel2[1].begin(Selector2XP1ChangeInterrupt);
-
-   for(uint8_t s = 0; s < 12; ++s)
+   for(uint8_t s = 0; s < Selector1Size; ++s)
    {
-      if(selector1Pos[s].k != SEL_NONE && digitalReadFast(selector1Pos[s].k) == LOW)
+      // Connect the change interrupt.
+      Selector1Inputs[s].begin();
+      // Initilize the input states.
+      if(SelectorInput::Test(Selector1Inputs[s], millis()) == SelectorInput::eSelected)
       {
-         Sel1Pos.Now(&selector1Pos[s]);
-         Serial.print("sel1 pos:");Serial.println(Sel1Pos.val());
+         Selector1.Arm(Selector1Inputs[s]);
+         Selector1.Update();
+         Selector1.Active();
       }
-      if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW)
+   }
+
+   for(uint8_t s = 0; s < Selector2Size; ++s)
+   {
+      // Connect the change interrupt.
+      Selector2Inputs[s].begin();
+      // Initilize the input states.
+      if(SelectorInput::Test(Selector2Inputs[s], millis()) == SelectorInput::eSelected)
       {
-         Sel2Pos.Now(&selector2Pos[s]);
-         Serial.print("sel2 pos:");Serial.println(Sel2Pos.val());
+         Selector2.Arm(Selector2Inputs[s]);
+         Selector2.Update();
+         Selector2.Active();
       }
    }
    UpdateSelectorStates();
@@ -539,7 +524,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
    }
    else
    {
-      if(Sel1Pos.k() == SEL_NONE && Sel2Pos.k() == SEL_NONE)
+      if(Selector1.Is() == SEL_NONE && Selector2.Is() == SEL_NONE)
       {
          uint8_t r = (button / 3) + 1;
          uint8_t c = (button % 3) + 1;
@@ -562,7 +547,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                break;
 
             default:
-               if(Sel1Pos.k() == SYSTEM)
+               if(Selector1.Is() == SYSTEM)
                {
                   // System Mode
                   switch(button)
@@ -573,7 +558,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                }
                else
                {
-                  if(Sel2Pos.k() == F1)
+                  if(Selector2.Is() == F1)
                   {
                      // F1 mode
                      switch(button)
@@ -582,7 +567,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                            break;
                      }
                   }
-                  else if(Sel2Pos.k() == F2)
+                  else if(Selector2.Is() == F2)
                   {
                      // F2 Mode
                      switch(button)
@@ -622,7 +607,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                break;
 
             default:
-               if(Sel1Pos.k() == SYSTEM)
+               if(Selector1.Is() == SYSTEM)
                {
                   // System mode
                   switch(button)
@@ -664,7 +649,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                }
                else
                {
-                  if(Sel2Pos.k() == F1)
+                  if(Selector2.Is() == F1)
                   {
                      // F1 Mode
                      switch(button)
@@ -712,7 +697,7 @@ void HandleButtonChange(ButtonMatrix::ButtonMasksType button, ButtonMatrix::Butt
                            break;
                      }
                   }
-                  else if(Sel2Pos.k() == F2)
+                  else if(Selector2.Is() == F2)
                   {
                      // F2 Mode
                   }
@@ -799,78 +784,231 @@ void EncoderInterrupt()
    Enc.HandleInterrupt();
 }
 
-void TestSelector1()
+void Selector1SystemChangeInterrupt()
 {
-   Sel1Pos.Reset(emptySel.k);
-   Sel1Pos.Interrupt = true;
-   for(uint8_t s = 0; s < 12; ++s)
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[0], millis()));
+   if(state == SelectorInput::eNotSelected)
    {
-      if(selector1Pos[s].k != SEL_NONE && digitalReadFast(selector1Pos[s].k) == LOW)
-      {
-         Sel1Pos.Reset(s);
-         Serial.println(Sel1Pos.val());
-         break;
-      }
+      Selector1.Arm(emptySelectorValue);
    }
-   // Reset debounce timer
-   Sel1Pos.Debounce = millis();
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[0]);
+   }
+}
+
+void Selector1XAxisChangeInterrupt()
+{
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[1], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector1.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[1]);
+   }
+}
+
+void Selector1YAxisChangeInterrupt()
+{
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[2], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector1.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[2]);
+   }
+}
+
+void Selector1ZAxisChangeInterrupt()
+{
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[3], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector1.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[3]);
+   }
+}
+
+void Selector1SpindleChangeInterrupt()
+{
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[4], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector1.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[4]);
+   }
+}
+
+void Selector1FeedrateChangeInterrupt()
+{
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[5], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector1.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[5]);
+   }
+}
+
+void Selector1LCDChangeInterrupt()
+{
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[6], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector1.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[6]);
+   }
+}
+
+void Selector1FilesChangeInterrupt()
+{
+   SelectorInput::StateT state(SelectorInput::Test(Selector1Inputs[7], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector1.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector1.Arm(Selector1Inputs[7]);
+   }
 }
 
 void Selector2JogChangeInterrupt()
 {
-   Sel2[0].Test(Sel2[0], millis());
+   SelectorInput::StateT state(Selector2Inputs[0].Test(Selector2Inputs[0], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector2.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[0]);
+   }
 }
 
 void Selector2XP1ChangeInterrupt()
 {
-   Sel2[1].Test(Sel2[1], millis());
-}
-
-void HandleSelector2Jog(bool selected)
-{
-      if(selected == true)
-      {
-         // Selected
-         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("JOGS");
-      }
-      else
-      {
-         // De-selected
-         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("JOGD");
-      }
-}
-
-void HandleSelector2XP1(bool selected)
-{
-      if(selected == true)
-      {
-         // Selected
-         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("XP1S");
-      }
-      else
-      {
-         // De-selected
-         Serial.print(millis() - Sel2Pos.Debounce); Serial.println("XP1D");
-      }
-}
-
-void TestSelector2()
-{
-   Sel2Pos.Reset(emptySel.k);
-   Sel2Pos.Interrupt = true;
-   for(uint8_t s = 0; s < 12; ++s)
+   SelectorInput::StateT state(Selector2Inputs[1].Test(Selector2Inputs[1], millis()));
+   if(state == SelectorInput::eNotSelected)
    {
-      if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW &&
-         millis() - Sel2Pos.Debounce > 10)
-      {
-   Sel2Pos.Debounce = millis();
-         Sel2Pos.Reset(s);
-         Serial.print(millis() - Sel2Pos.Debounce); Serial.println(Sel2Pos.val());
-         break;
-      }
+      Selector2.Arm(emptySelectorValue);
    }
-   // Reset debounce timer
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[1]);
+   }
 }
+
+void Selector2X1ChangeInterrupt()
+{
+   SelectorInput::StateT state(Selector2Inputs[2].Test(Selector2Inputs[2], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector2.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[2]);
+   }
+}
+
+void Selector2X10ChangeInterrupt()
+{
+   SelectorInput::StateT state(Selector2Inputs[3].Test(Selector2Inputs[3], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector2.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[3]);
+   }
+}
+
+void Selector2X100ChangeInterrupt()
+{
+   SelectorInput::StateT state(Selector2Inputs[4].Test(Selector2Inputs[4], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector2.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[4]);
+   }
+}
+
+void Selector2F1ChangeInterrupt()
+{
+   SelectorInput::StateT state(Selector2Inputs[5].Test(Selector2Inputs[5], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector2.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[5]);
+   }
+}
+
+void Selector2F2ChangeInterrupt()
+{
+   SelectorInput::StateT state(Selector2Inputs[6].Test(Selector2Inputs[6], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector2.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[6]);
+   }
+}
+
+void Selector2DebugChangeInterrupt()
+{
+   SelectorInput::StateT state(Selector2Inputs[7].Test(Selector2Inputs[7], millis()));
+   if(state == SelectorInput::eNotSelected)
+   {
+      Selector2.Arm(emptySelectorValue);
+   }
+   else if(state == SelectorInput::eSelected)
+   {
+      Selector2.Arm(Selector2Inputs[7]);
+   }
+}
+
+//void TestSelector2()
+//{
+//   Sel2Pos.Reset(emptySel.k);
+//   Sel2Pos.Interrupt = true;
+//   for(uint8_t s = 0; s < 12; ++s)
+//   {
+//      if(selector2Pos[s].k != SEL_NONE && digitalReadFast(selector2Pos[s].k) == LOW &&
+//         millis() - Sel2Pos.Debounce > 10)
+//      {
+//   Sel2Pos.Debounce = millis();
+//         Sel2Pos.Reset(s);
+//         Serial.print(millis() - Sel2Pos.Debounce); Serial.println(Sel2Pos.val());
+//         break;
+//      }
+//   }
+//   // Reset debounce timer
+//}
 
 float GetMachinePosition(char axis)
 {
@@ -1016,13 +1154,13 @@ void ProcessEncoderRotation(int8_t steps)
       }
    }
    if((grblState.state == eJog || grblState.state == eIdle) && steps != 0 &&
-      (Sel1Pos.k() == AXIS_X || Sel1Pos.k() == AXIS_Y || Sel1Pos.k() == AXIS_Z))
+      (Selector1.Is() == AXIS_X || Selector1.Is() == AXIS_Y || Selector1.Is() == AXIS_Z))
    {
       int8_t dir(steps > 0 ? 1 : -1);
-      const char *XYZ(Sel1Pos.k() == AXIS_X ? "X" : Sel1Pos.k() == AXIS_Y ? "Y" : "Z");
+      const char *XYZ(Selector1.Is() == AXIS_X ? "X" : Selector1.Is() == AXIS_Y ? "Y" : "Z");
       float s(0); // Travel distance (mm)
       float f(0); // Feed rate (mm / min)
-      if(Sel2Pos.k() == JOG)
+      if(Selector2.Is() == JOG)
       {
          time_t delta(uSecs - olduSecs);
          if(delta > 100)
@@ -1047,22 +1185,22 @@ void ProcessEncoderRotation(int8_t steps)
          //sprintf(grblJogCommand, "$J=G91F%.3f%s%.3f", f, XYZ, s);
          //SendToGrbl(grblJogCommand);
       }
-      else if(Sel2Pos.k() == XP1)
+      else if(Selector2.Is() == XP1)
       {
          s = 0.1 * dir;
          f = 1000.0;
       }
-      else if(Sel2Pos.k() == X1)
+      else if(Selector2.Is() == X1)
       {
          s = dir;
          f = 1000.0;
       }
-      else if(Sel2Pos.k() == X10)
+      else if(Selector2.Is() == X10)
       {
          s = 10 * dir;
          f = 3000.0;
       }
-      else if(Sel2Pos.k() == X100 && Sel1Pos.k() != AXIS_Z)
+      else if(Selector2.Is() == X100 && Selector1.Is() != AXIS_Z)
       {
          // 100 is too big for the Z axis. Allow this only for X and Y.
          s = 100 * dir;
@@ -1072,26 +1210,32 @@ void ProcessEncoderRotation(int8_t steps)
       if(f > 0)
       {
          s = LimitTravelRequest(s, XYZ[0]);
-         sprintf(grblJogCommand, "$Q=%s%.5f", XYZ, s);
-         //sprintf(grblJogCommand, "$J=G91F%f%s%f", f, XYZ, s);
+         //if(Selector2.Is() == JOG)
+         {
+            sprintf(grblJogCommand, "$Q=%s%.5f", XYZ, s);
+         }
+         //else
+         //{
+         //   sprintf(grblJogCommand, "$J=G91F%f%s%f", f, XYZ, s);
+         //}
          SendToGrbl(grblJogCommand);
       }
    }
-   else if(Sel1Pos.k() == SEL_NONE && Sel1Pos.k() == SEL_NONE && steps != 0)
+   else if(Selector1.Is() == SEL_NONE && Selector1.Is() == SEL_NONE && steps != 0)
    {
       char buf[20] = { '\0' };
       sprintf(buf, "STEPS: %d", steps);
       AddLineToCommandTerminal(buf, true);
    }
-   else if(Sel1Pos.k() == SPINDLE && steps != 0 && grblState.maxSpindleSpeed != 0 &&
-           (Sel2Pos.k() == X1 || Sel2Pos.k() == X10 || Sel2Pos.k() == X100))
+   else if(Selector1.Is() == SPINDLE && steps != 0 && grblState.maxSpindleSpeed != 0 &&
+           (Selector2.Is() == X1 || Selector2.Is() == X10 || Selector2.Is() == X100))
    {
       int16_t cmd(steps);
-      if(Sel2Pos.k() == X10)
+      if(Selector2.Is() == X10)
       { 
          cmd *= 10;
       }
-      else if(Sel2Pos.k() == X100)
+      else if(Selector2.Is() == X100)
       { 
          cmd *= 100;
       }
@@ -1106,15 +1250,15 @@ void ProcessEncoderRotation(int8_t steps)
       }
       UpdateSpindleDisplay();
    }
-   else if(Sel1Pos.k() == FEEDRATE && steps != 0 &&
-           (Sel2Pos.k() == X1 || Sel2Pos.k() == X10 || Sel2Pos.k() == X100))
+   else if(Selector1.Is() == FEEDRATE && steps != 0 &&
+           (Selector2.Is() == X1 || Selector2.Is() == X10 || Selector2.Is() == X100))
    {
       int16_t cmd(steps);
-      if(Sel2Pos.k() == X10)
+      if(Selector2.Is() == X10)
       { 
          cmd *= 10;
       }
-      else if(Sel2Pos.k() == X100)
+      else if(Selector2.Is() == X100)
       { 
          cmd *= 100;
       }
@@ -1129,15 +1273,15 @@ void ProcessEncoderRotation(int8_t steps)
       }
       UpdateFeedRateDisplay();
    }
-   else if(Sel1Pos.k() == LCDBRT && steps != 0 &&
-           (Sel2Pos.k() == X1 || Sel2Pos.k() == X10 || Sel2Pos.k() == X100))
+   else if(Selector1.Is() == LCDBRT && steps != 0 &&
+           (Selector2.Is() == X1 || Selector2.Is() == X10 || Selector2.Is() == X100))
    {
       int16_t cmd(lcdBrightness);
-      if(Sel2Pos.k() == X10)
+      if(Selector2.Is() == X10)
       {
          steps *= 10;
       }
-      else if(Sel2Pos.k() == X100)
+      else if(Selector2.Is() == X100)
       {
          steps *= 100;
       }
@@ -1150,7 +1294,7 @@ void ProcessEncoderRotation(int8_t steps)
       UpdateLCDBrightnessIndication();
       tft.updateScreenAsync();
    }
-   else if(Sel1Pos.k() == FILES && steps != 0)
+   else if(Selector1.Is() == FILES && steps != 0)
    {
       GC.Select(steps);
       tft.updateScreenAsync();
@@ -1701,7 +1845,7 @@ uint16_t ParseOther(char *msg)
          ++q;
       }
 
-      if(redraw == true && Sel2Pos.k() == DEBUG)
+      if(redraw == true && Selector2.Is() == DEBUG)
       {
          UpdateGrblTerminal();
       }
@@ -1719,380 +1863,15 @@ void RefreshScreen()
    UpdateSelectorStates();
    UpdateParameterDisplay();
 
-   if(Sel1Pos.k() == LCDBRT)
+   if(Selector1.Is() == LCDBRT)
    {
       UpdateLCDBrightnessIndication();
    }
 }
 
-void UpdateClockDisplay()
-{
-   tft.fillCircle(16, 16, 10, ILI9488_RED);
-   if(heartBeatTimeout > 1000)
-   {
-      heartBeatTimeout -= 1000;
-      tft.fillCircle(16, 16, 8, ILI9488_BLACK);
-   }
-
-   tft.fillCircle(46, 16, 10, ILI9488_BLUE);
-   if(grblState.laserMode == false)
-   {
-      tft.fillCircle(46, 16, 8, ILI9488_BLACK);
-   }
-   else if(grblState.currentSpindleSpeed != 0 && grblState.spindleState != esM5)
-   {
-      // Laser is running.
-      if(laserTimeout > 500)
-      {
-         laserTimeout -= 500;
-         tft.fillCircle(46, 16, 8, ILI9488_GREEN);
-      }
-   }
-   
-
-   tft.fillRect(72, 20, 8, 8, btnShiftPressed ? ILI9488_WHITE : ILI9488_BLACK);
-   tft.fillTriangle(66, 20, 76, 10, 86, 20, btnShiftPressed ? ILI9488_WHITE : ILI9488_BLACK);
-}
-
-void UpdateLCDBrightnessIndication(bool clear)
-{
-   tft.fillRect(330, 144, 40, 16, ILI9488_BLACK);
-   if(clear == false)
-   {
-      tft.setTextColor(ILI9488_LIGHTGREY, ILI9488_BLACK);
-      tft.setTextSize(2);
-      tft.setCursor(330, 144);
-      tft.print(lcdBrightness);
-   }
-}
-
-void Text(uint16_t x, uint16_t y, const char *text)
-{
-   tft.setCursor(x, y);
-   tft.print(text);
-}
-
-void Text(uint16_t x, uint16_t y, const char *text, size_t len)
-{
-   tft.setCursor(x, y);
-   for(size_t x = 0; x <= len; ++x)
-   {
-      if(text[x] == '\0')
-      {
-         break;
-      }
-      tft.print(text[x]);
-   }
-}
-
-void Blank()
-{
-
-   tft.fillScreen(ILI9488_BLACK);
-
-   //int16_t x, y;//, x1, y1;
-   //uint16_t w, h;
-   //tft.setTextSize(1);
-   //   tft.getTextBounds("H", 0, 0, &x, &y, &w, &h);
-   //tft.setCursor(200, 160);
-   //tft.print("H ");tft.print(w);tft.print("-");tft.print(h);
-   //tft.setTextSize(2);
-   //   tft.getTextBounds("H", 0, 0, &x, &y, &w, &h);
-   //tft.setCursor(200, 176);
-   //tft.print("H ");tft.print(w);tft.print("-");tft.print(h);
-   //tft.setTextSize(3);
-   //   tft.getTextBounds("8", 0, 0, &x, &y, &w, &h);
-   //tft.setCursor(200, 208);
-   //tft.print("H ");tft.print(w);tft.print("-");tft.print(h);
-
-   tft.setTextSize(3);
-   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-   Text(287, 30, "MPOS");
-   Text(397, 30, "WPOS");
-   tft.setTextSize(1);
-   //Text(140, 0, VERSION_DATA[0]);
-   //Text(140, 8, VERSION_DATA[1]);
-   //Text(140, 16, VERSION_DATA[2]);
-}
-
-void DrawTestPattern()
-{
-  tft.setTextSize(1);
-  for(int r = 0; r < tft.height(); r = r+ 16)
-  {
-     tft.drawFastHLine(0, r, tft.width(), ILI9488_YELLOW);
-     tft.setCursor(0, r);
-     tft.print(r);
-  }
-  for(int c = 0; c < tft.width(); c = c + 20)
-  {
-     tft.drawFastVLine(c, 0, tft.height(), ILI9488_YELLOW);
-     tft.setCursor(c, 0);
-     tft.print(c);
-  }
-}
-
-void UpdateStatusDisplay()
-{
-   if(statusValues[eStatus] != NULL)
-   {
-      int16_t x, y;
-      uint16_t w, h;
-      tft.fillRect(340, 0, tft.width() - 340, 24, ILI9488_BLACK);
-      tft.setTextSize(3);
-      tft.getTextBounds(statusValues[eStatus], 0, 0, &x, &y, &w, &h);
-      x = tft.width() - w;
-      y = 0;
-      if(CompareStrings(statusValues[eStatus], "Alarm"))
-      {
-         grblState.state = eAlarm;
-         grblState.isHomed = false;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Door")  ||
-              CompareStrings(statusValues[eStatus], "Door:1") ||
-              CompareStrings(statusValues[eStatus], "Door:2"))
-      {
-         grblState.state = eDoor;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Idle"))
-      {
-         if(grblState.state == eHome)
-         {
-            // Just finished a successful homing cycle, reset the
-            // distance tracker to the current machine position.
-            grblState.cmdTravel[0] = GetMachinePosition('X'); //grblState.WCO[0];
-            grblState.cmdTravel[1] = GetMachinePosition('Y');//grblState.WCO[1];
-            grblState.cmdTravel[2] = GetMachinePosition('Z');//grblState.WCO[2];
-            //if(negative space)
-            //{
-               //// If operating in negative space, then the max travel is
-               //// redefined as the absolute value of the machine position at the pull-off point.
-               grblState.axisMaxTravel[0] = fabs(GetMachinePosition('X'));
-               grblState.axisMaxTravel[1] = fabs(GetMachinePosition('Y'));
-               // Except for Z (on the X-Carve) since the limit switch is at the
-               // machine origin instead of the machine limit.
-               grblState.axisMaxTravel[2] = fabs(grblState.axisMaxTravel[2]);
-            //}
-         }
-         // Consider if this is where we need to reset the machine position reference for
-         // grblState.cmdTravel when entering the idle state from a Jog or Run state
-         // in case the position change command was not sent by the handheld but instead
-         // was sent by the g-code sender or a button matrix push to Go To 0 command for example.
-         grblState.state = eIdle;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_YELLOW);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Run"))
-      {
-         grblState.state = eRun;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_LIGHTGREEN);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Check"))
-      {
-         grblState.state = eCheck;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_MAGENTA);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Sleep"))
-      {
-         grblState.state = eSleep;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_DARKCYAN);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Jog"))
-      {
-         grblState.state = eJog;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Home"))
-      {
-         grblState.state = eHome;
-         grblState.isHomed = true;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_GREEN);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Hold") ||
-              CompareStrings(statusValues[eStatus], "Hold:0"))
-      {
-         grblState.state = eHold;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Hold:1"))
-      {
-         grblState.state = eHold;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_MAROON);
-      }
-      else if(CompareStrings(statusValues[eStatus], "Queue") || // <--- What's the deal with this guy...
-              CompareStrings(statusValues[eStatus], "Door:0") ||
-              CompareStrings(statusValues[eStatus], "Door:3"))
-      {
-         grblState.state = eDoor;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_MAROON);
-      }
-      else
-      {
-         grblState.state = eUnknownState;
-         tft.setTextColor(ILI9488_BLACK, ILI9488_WHITE);
-      }
-      Text(x, y, statusValues[eStatus]);
-
-      char s[32] = { '\0' };
-      x = 252;
-      y = 52;
-      
-      tft.setTextSize(2);
-      tft.setTextColor(ILI9488_BLACK, ILI9488_ORANGE);
-      if(grblState.positionIsMPos == true)
-      {
-         sprintf(s, "X %8.3f %8.3f", grblState.RPOS[0], grblState.RPOS[0] - grblState.WCO[0]);
-         Text(x, y, s);
-         y = 68;
-         sprintf(s, "Y %8.3f %8.3f", grblState.RPOS[1], grblState.RPOS[1] - grblState.WCO[1]);
-         Text(x, y, s);
-         y = 84;
-         sprintf(s, "Z %8.3f %8.3f", grblState.RPOS[2], grblState.RPOS[2] - grblState.WCO[2]);
-         Text(x, y, s);
-      }
-      else
-      {
-         sprintf(s, "X %8.3f %8.3f", grblState.RPOS[0] + grblState.WCO[0], grblState.RPOS[0]);
-         Text(x, y, s);
-         y = 68;
-         sprintf(s, "Y %8.3f %8.3f", grblState.RPOS[1] + grblState.WCO[1], grblState.RPOS[1]);
-         Text(x, y, s);
-         y = 84;
-         sprintf(s, "Z %8.3f %8.3f", grblState.RPOS[2] + grblState.WCO[2], grblState.RPOS[2]);
-         Text(x, y, s);
-      }
-      
-
-
-      tft.setTextSize(1);
-      tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-
-      x = 128;
-      y = 8;
-      if(grblState.plannerBlocksAvailable > 12)
-      {
-         tft.setTextColor(ILI9488_GREEN, ILI9488_BLACK);
-      }
-      else if(grblState.plannerBlocksAvailable > 6)
-      {
-         tft.setTextColor(ILI9488_YELLOW, ILI9488_BLACK);
-      }
-      else
-      {
-         tft.setTextColor(ILI9488_RED, ILI9488_BLACK);
-      }
-      sprintf(s, "BL %02d/%02d", grblState.plannerBlocksAvailable, grblState.plannerBlockCount);
-      Text(x, y, s);
-
-      y = 16;
-      if(grblState.rxBufferBytesAvailable > 96)
-      {
-         tft.setTextColor(ILI9488_GREEN, ILI9488_BLACK);
-      }
-      else if(grblState.rxBufferBytesAvailable > 32)
-      {
-         tft.setTextColor(ILI9488_YELLOW, ILI9488_BLACK);
-      }
-      else
-      {
-         tft.setTextColor(ILI9488_RED, ILI9488_BLACK);
-      }
-      sprintf(s, "RX %03d/%03d", grblState.rxBufferBytesAvailable, grblState.rxBufferSize);
-      Text(x, y, s);
-
-      UpdateFeedRateDisplay();
-      UpdateSpindleDisplay();
-
-      //tft.setTextSize(1);
-      //tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-      //for(uint8_t i = 1; i < eStatusRange; ++i)
-      //{
-      //   tft.setCursor(0, 16 * (i));
-      //   tft.print(&grblStatusImage[i][1]);
-      //   if(statusValues[i] != NULL)
-      //   {
-      //      tft.setCursor(50, 16 * (i));
-      //      tft.print(statusValues[i]);
-      //   }
-      //}
-   }
-}
-
-void UpdateSelectorStates()
-{
-   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-   tft.setTextSize(2);
-   uint16_t x = 300;
-   uint16_t y = 160;
-   tft.fillRect(x, y, tft.width() - x, 20, ILI9488_BLACK);
-   tft.drawRect(x, y, 102, 20, ILI9488_CYAN);
-   x = 305;
-   y = 162;
-
-   if(Sel1Pos.k() == SYSTEM)
-   {
-      tft.setTextColor(ILI9488_BLACK, ILI9488_RED);
-   }
-   Text(x, y, Sel1Pos.val());
-
-   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-
-   x = 415;
-   y = 160;
-   tft.drawRect(x, y, tft.width() - x, 20, ILI9488_PURPLE);
-   x = 420;
-   y = 162;
-   Text(x, y, Sel2Pos.val());
-}
-
-void UpdateFeedRateDisplay()
-{
-   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-   tft.setTextSize(1);
-   uint16_t x = 332;
-   uint16_t y = 112;
-   char s[32] = { '\0' };
-   sprintf(s, "F:%04ld,%7.2f,%7.2f", grblState.cmdFeedRate, grblState.programmedFeedRate, grblState.currentFeedRate);
-   Text(x, y, s);
-}
-
-void UpdateSpindleDisplay()
-{
-   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-   tft.setTextSize(1);
-   uint16_t x = 332;
-   uint16_t y = 122;
-   char s[32] = { '\0' };
-   sprintf(s, "S:%05ld,%7.1f,%7.1f", grblState.cmdSpindleSpeed, grblState.programmedSpindleSpeed, grblState.currentSpindleSpeed);
-   Text(x, y, s);
-}
-
-void UpdateParameterDisplay()
-{
-   tft.setTextColor(ILI9488_WHITE, ILI9488_BLACK);
-   uint16_t x = 240;
-   uint16_t y = 0;
-   if(grblState.activeWorkspace != nullptr && grblState.activeWorkspace->id[0] != '\0')
-   {
-      tft.setTextSize(3);
-      Text(x, y, grblState.activeWorkspace->id);
-   }
-   
-   //tft.setTextSize(1);
-   //y = 8;
-   ////tft.fillRect(x, y, 100, 8, ILI9488_BLACK);
-   //sprintf(s, "%s:%.3f,%.3f,%.3f", grblState.park28.id, grblState.park28.val3[0], grblState.park28.val3[1], grblState.park28.val3[2]);
-   //Text(x, y, s);
-   //y = 16;
-   ////tft.fillRect(x, y, 100, 8, ILI9488_BLACK);
-   //sprintf(s, "%s:%.3f,%.3f,%.3f", grblState.park30.id, grblState.park30.val3[0], grblState.park30.val3[1], grblState.park30.val3[2]);
-   //Text(x, y, s);
-}
-
 void UpdateGrblTerminal()
 {
-   if(Sel2Pos.k() == DEBUG)
+   if(Selector2.Is() == DEBUG)
    {
       tft.setTextSize(1);
 
@@ -2323,39 +2102,8 @@ void loop()
    // Check all user inputs first to establish a desired state.
    ///////////////////////////////////////////////////////////
    // Check selectors
-   if(Sel1Pos.Interrupt == true)
-   {
-      // Interrupt received.
-      if(millis() - Sel1Pos.Debounce > 20)
-      {
-         // Accept change
-         if(Sel1Pos.Position == SEL_NONE)
-         {
-            Sel1Pos.Now(&emptySel);
-         }
-         else
-         {
-            Sel1Pos.Now(&selector1Pos[Sel1Pos.Position]);
-         }
-      }
-   }
-
-   if(Sel2Pos.Interrupt == true)
-   {
-      // Interrupt received.
-      if(millis() - Sel2Pos.Debounce > 20)
-      {
-         // Accept change
-         if(Sel2Pos.Position == SEL_NONE)
-         {
-            Sel2Pos.Now(&emptySel);
-         }
-         else
-         {
-            Sel2Pos.Now(&selector2Pos[Sel2Pos.Position]);
-         }
-      }
-   }
+   Selector1.Update();
+   Selector2.Update();
    // Check button matrix.
    BM.Update();
    // Check encoder.
@@ -2378,26 +2126,27 @@ void loop()
        tft.updateScreenAsync();
    }
 
-   if(Sel1Pos.ChangeInFrame() == true || Sel2Pos.ChangeInFrame() == true)
+   if(Selector1.hasChange() == true || Selector2.hasChange() == true)
    {
-      UpdateSelectorStates();
-      if(Sel1Pos.ChangeInFrame())
+      if(Selector1.hasChange())
       {
-         // Handle sel1 changes if required.
-         if(Sel1Pos.p() == FILES || Sel1Pos.k() == FILES)
+         // Handle Selector1Inputs changes if required.
+         if(Selector1.Is() == FILES || Selector1.Was() == FILES)
          {
-            GC.HandleSelectorStateChange(Sel1Pos.k(), Sel1Pos.p());
+            GC.HandleSelectorStateChange(Selector1.Is() == FILES);
          }
 
-         if(Sel1Pos.p() == LCDBRT || Sel1Pos.k() == LCDBRT)
+         if(Selector1.Is() == LCDBRT || Selector1.Was() == LCDBRT)
          {
-            UpdateLCDBrightnessIndication(Sel1Pos.p() == LCDBRT);
+            UpdateLCDBrightnessIndication(Selector1.Is() == LCDBRT);
          }
       }
       else
       {
-         // Handle sel2 changes if required.
+         // Handle Selector2Inputs changes if required.
       }
+      
+      UpdateSelectorStates();
    }
 
    // Update the sender state.
@@ -2472,7 +2221,7 @@ void loop()
          gCodeSender = eExternalSender;
          grblStatusTimer = 0;
       }
-      else if (Sel2Pos.k() == DEBUG)
+      else if (Selector2.Is() == DEBUG)
       {
          // This consumes a fair amount of CPU time
          // so ONLY use it to debug the communication
@@ -2537,19 +2286,19 @@ void loop()
   {
      // Press
      pastEncoderSwitchPos = true;
-     if(Sel1Pos.k() == SEL_NONE && Sel2Pos.k() == SEL_NONE)
+     if(Selector1.Is() == SEL_NONE && Selector2.Is() == SEL_NONE)
      {
         DrawTestPattern();
      }
      else if(grblState.state == eJog &&
-             (Sel1Pos.k() == AXIS_X || Sel1Pos.k() == AXIS_Y || Sel1Pos.k() == AXIS_Z))
+             (Selector1.Is() == AXIS_X || Selector1.Is() == AXIS_Y || Selector1.Is() == AXIS_Z))
      {
         // Stop the jog command imediately.
         userial.write(0x85);
         SendToGrbl("G4P0");
         // Need to capture the current machine position for grblState.cmdTravel here!
      }
-     else if(Sel1Pos.k() == FILES)
+     else if(Selector1.Is() == FILES)
      {
         GC.Select(true);
      }
@@ -2558,38 +2307,31 @@ void loop()
   {
      // Release
      pastEncoderSwitchPos = false;
-     if(Sel1Pos.k() == SEL_NONE && Sel2Pos.k() == SEL_NONE)
+     if(Selector1.Is() == SEL_NONE && Selector2.Is() == SEL_NONE)
      {
         RefreshScreen();
      }
-     else if(Sel1Pos.k() == SPINDLE && grblState.state != eRun)
+     else if(Selector1.Is() == SPINDLE && grblState.state != eRun)
      {
         char s[20] = { '\0' };
         sprintf(s, "S%ld", grblState.cmdSpindleSpeed);
         SendToGrbl(s);
         RequestGrblStateUpdate(GCREQ);
      }
-     else if(Sel1Pos.k() == FEEDRATE && grblState.state != eRun)
+     else if(Selector1.Is() == FEEDRATE && grblState.state != eRun)
      {
         char s[20] = { '\0' };
         sprintf(s, "F%ld", grblState.cmdFeedRate);
         SendToGrbl(s);
         RequestGrblStateUpdate(GCREQ);
      }
-     else if(Sel1Pos.k() == FILES)
+     else if(Selector1.Is() == FILES)
      {
         GC.Select(false);
      }
    }
 
    // At the end of the frame reset the selector change flags if necessary.
-   if(Sel1Pos.ChangeInFrame())
-   {
-      Sel1Pos.ResetChangeInFrame();
-   }
-
-   if(Sel2Pos.ChangeInFrame())
-   {
-      Sel2Pos.ResetChangeInFrame();
-   }
+   Selector1.Active();
+   Selector2.Active();
 }

@@ -10,7 +10,7 @@ class Streamer
       bool begin();
       void Select(bool pressed);
       void Select(int8_t steps);
-      void HandleSelectorStateChange(uint8_t now, uint8_t was);
+      void HandleSelectorStateChange(bool selected);
       bool OpenDirectory(const char *name);
       bool OpenFile(const char *name);
       uint16_t Available();
